@@ -176,8 +176,3 @@ Hook Incubator, run by Atrium Academy and funded by the Uniswap Foundation.
 
 BUSL-1.1 — matches Uniswap v4 core licensing. Converts to GPL after up to four
 years.
-
----
-
-*Brook is a work in progress. The code in this repo is not yet ready for
-production use, has not been audited, and should not custody real funds.
