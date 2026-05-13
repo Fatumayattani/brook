@@ -148,7 +148,7 @@ frontend/                       Next.js demo (added in PR #21)
 ## Documentation
 
 The full mechanism design, hook permissions, data model, attack surface, and
-roadmap live in [`docs/brook-starter-pack.md`](docs/brook-starter-pack.md).
+roadmap live in [`docs/]
 
 ## Roadmap
 
@@ -159,7 +159,7 @@ Brook is being built across 22 PRs grouped into four phases:
 3. **The mechanism** (PRs 8–13) — score function, in-range accumulator, fee skim, epoch rollover, claim flow
 4. **Hardening and demo** (PRs 14–22) — security, fuzz tests, deployment, frontend, pitch
 
-See the full PR breakdown in [`docs/brook-starter-pack.md`](docs/brook-starter-pack.md).
+See the full PR breakdown in [`docs/`]
 
 ## Built during
 
