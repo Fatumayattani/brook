@@ -3,17 +3,82 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
+import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
+import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
+
+import {V4PoolManagerDeployer} from "hookmate/artifacts/V4PoolManager.sol";
 
 import {Brook} from "../src/Brook.sol";
 import {Types} from "../src/libraries/Types.sol";
 
 contract BrookTest is Test {
+    /// @dev Standard CREATE2 deployer address used across most EVM chains.
+    ///      Kept here for documentation — production deploys use this proxy,
+    ///      but Foundry's `new Contract{salt: s}(...)` uses the test contract
+    ///      itself as the deployer, so we mine against `address(this)` below.
+    address constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
+
+    IPoolManager internal poolManager;
+    Brook internal brook;
+
+    function setUp() public {
+        // 1. Deploy a fresh PoolManager from hookmate bytecode.
+        poolManager = IPoolManager(V4PoolManagerDeployer.deploy(address(this)));
+
+        // 2. Compute the flag bitmask matching Brook.getHookPermissions().
+        uint160 flags = uint160(
+              Hooks.BEFORE_INITIALIZE_FLAG
+            | Hooks.AFTER_ADD_LIQUIDITY_FLAG
+            | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
+            | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
+            | Hooks.AFTER_SWAP_FLAG
+            | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+        );
+
+        // 3. Mine a salt using `address(this)` as the deployer, because in
+        //    Foundry tests `new Contract{salt: s}(...)` deploys via the
+        //    test contract — not the canonical CREATE2 proxy.
+        (address expected, bytes32 salt) = HookMiner.find(
+            address(this),
+            flags,
+            type(Brook).creationCode,
+            abi.encode(address(poolManager))
+        );
+
+        // 4. Deploy Brook with the mined salt.
+        brook = new Brook{salt: salt}(poolManager);
+        require(address(brook) == expected, "BrookTest: deploy mismatch");
+    }
+
+    // ---------------------------------------------------------------------
+    // Deployment
+    // ---------------------------------------------------------------------
+
+    function test_deploy_addressEncodesPermissionFlags() public view {
+        uint160 expectedFlags = uint160(
+              Hooks.BEFORE_INITIALIZE_FLAG
+            | Hooks.AFTER_ADD_LIQUIDITY_FLAG
+            | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
+            | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
+            | Hooks.AFTER_SWAP_FLAG
+            | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+        );
+
+        // The lowest 14 bits of the hook address must equal the flag bitmask.
+        uint160 addressFlags = uint160(address(brook)) & uint160(0x3FFF);
+        assertEq(addressFlags, expectedFlags, "address bits do not match flags");
+    }
+
+    function test_deploy_brookPointsAtPoolManager() public view {
+        assertEq(address(brook.poolManager()), address(poolManager));
+    }
+
     // ---------------------------------------------------------------------
     // Permission flags
     // ---------------------------------------------------------------------
 
-    function test_getHookPermissions_returnsExpectedFlags() public pure {
-        Hooks.Permissions memory perms = _expectedPermissions();
+    function test_getHookPermissions_returnsExpectedFlags() public view {
+        Hooks.Permissions memory perms = brook.getHookPermissions();
 
         assertTrue(perms.beforeInitialize, "beforeInitialize should be true");
         assertTrue(perms.afterAddLiquidity, "afterAddLiquidity should be true");
@@ -33,14 +98,8 @@ contract BrookTest is Test {
     }
 
     // ---------------------------------------------------------------------
-    // State shape
+    // State shape sanity checks
     // ---------------------------------------------------------------------
-    //
-    // We can't yet instantiate Brook itself (the constructor requires an
-    // IPoolManager and the deployed address must have mined flag bits).
-    // That comes in PR #3. For now, we verify the Types structs have the
-    // shape we expect — guards against accidental field renames or removals
-    // that would break subsequent PRs.
 
     function test_poolConfig_defaultValuesAreZero() public pure {
         Types.PoolConfig memory cfg;
@@ -69,28 +128,5 @@ contract BrookTest is Test {
         assertEq(lp.lastTouched, 0);
         assertEq(lp.pendingClaim, 0);
         assertEq(lp.scoreSnapshot, 0);
-    }
-
-    // ---------------------------------------------------------------------
-    // Helpers
-    // ---------------------------------------------------------------------
-
-    function _expectedPermissions() internal pure returns (Hooks.Permissions memory) {
-        return Hooks.Permissions({
-            beforeInitialize:                true,
-            afterInitialize:                 false,
-            beforeAddLiquidity:              false,
-            afterAddLiquidity:               true,
-            beforeRemoveLiquidity:           true,
-            afterRemoveLiquidity:            true,
-            beforeSwap:                      false,
-            afterSwap:                       true,
-            beforeDonate:                    false,
-            afterDonate:                     false,
-            beforeSwapReturnDelta:           false,
-            afterSwapReturnDelta:            true,
-            afterAddLiquidityReturnDelta:    false,
-            afterRemoveLiquidityReturnDelta: false
-        });
     }
 }
