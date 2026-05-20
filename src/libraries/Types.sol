@@ -1,6 +1,25 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
+/// @title Brook Constants
+/// @notice Protocol-wide constants used across Brook contracts.
+library BrookConstants {
+    /// @notice Minimum epoch length: 1 hour.
+    uint64 internal constant MIN_EPOCH_LENGTH = 1 hours;
+
+    /// @notice Maximum epoch length: 90 days.
+    uint64 internal constant MAX_EPOCH_LENGTH = 90 days;
+
+    /// @notice Maximum smoothing fee: 50% of swap fees (5000 bps).
+    uint16 internal constant MAX_SMOOTHING_FEE = 5000;
+
+    /// @notice Minimum in-range multiplier: 1 (no differentiation).
+    uint16 internal constant MIN_IN_RANGE_MULTIPLIER = 1;
+
+    /// @notice Maximum in-range multiplier: 10 (10x for in-range LPs).
+    uint16 internal constant MAX_IN_RANGE_MULTIPLIER = 10;
+}
+
 /// @title Brook Types
 /// @notice Core data structures used by the Brook hook.
 /// @dev Grouped in a library for clarity and reuse across Brook.sol,
