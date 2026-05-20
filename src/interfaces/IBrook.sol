@@ -5,10 +5,44 @@ import {Types} from "../libraries/Types.sol";
 
 /// @title IBrook
 /// @notice Public interface for the Brook hook.
-/// @dev This interface grows through PRs #5–#13 as state-mutating functions
-///      and events are added. For now it exposes only view functions that
-///      let external callers (tests, frontend, integrators) read state.
 interface IBrook {
+
+    // ---------------------------------------------------------------------
+    // Errors
+    // ---------------------------------------------------------------------
+
+    /// @notice Thrown when epochLength is outside the allowed range.
+    error InvalidEpochLength(uint64 provided, uint64 min, uint64 max);
+
+    /// @notice Thrown when smoothingFee exceeds the maximum allowed bps.
+    error InvalidSmoothingFee(uint16 provided, uint16 max);
+
+    /// @notice Thrown when inRangeMultiplier is outside the allowed range.
+    error InvalidInRangeMultiplier(uint16 provided, uint16 min, uint16 max);
+
+    /// @notice Thrown when beforeInitialize fires but configurePool was not called first.
+    error PoolNotConfigured(bytes32 poolId);
+
+    /// @notice Thrown when configurePool is called on an already initialized pool.
+    error PoolAlreadyInitialized(bytes32 poolId);
+
+    // ---------------------------------------------------------------------
+    // Events
+    // ---------------------------------------------------------------------
+
+    /// @notice Emitted when a pool is successfully initialized with Brook.
+    event PoolInitialized(
+        bytes32 indexed poolId,
+        uint64 epochLength,
+        uint16 smoothingFee,
+        uint16 inRangeMultiplier,
+        uint64 startTime
+    );
+
+    // ---------------------------------------------------------------------
+    // View functions
+    // ---------------------------------------------------------------------
+
     /// @notice Returns the config for a given pool.
     function getPoolConfig(bytes32 poolId)
         external
