@@ -28,17 +28,15 @@ contract Brook is BaseHook, IBrook {
     // ---------------------------------------------------------------------
 
     /// @notice Per-pool immutable configuration.
-    /// @dev Set once at beforeInitialize. Cannot change after.
     mapping(bytes32 poolId => Types.PoolConfig) internal _config;
 
-    /// @notice Per-pool epoch state. Mutates on every relevant action.
+    /// @notice Per-pool epoch state.
     mapping(bytes32 poolId => Types.EpochState) internal _epoch;
 
-    /// @notice Per-LP-position state, keyed by pool then by position key.
+    /// @notice Per-LP-position state.
     mapping(bytes32 poolId => mapping(bytes32 positionKey => Types.LPState)) internal _positions;
 
     /// @notice Pending config set by configurePool before pool initialization.
-    /// @dev Consumed and deleted by beforeInitialize. Prevents replay.
     mapping(bytes32 poolId => Types.PoolConfig) internal _pendingConfig;
 
     /// @notice Tracks which pools have been initialized by Brook.
@@ -56,10 +54,6 @@ contract Brook is BaseHook, IBrook {
 
     /// @notice Set pool parameters before calling poolManager.initialize.
     /// @dev Must be called before initialize. Can only be set once per pool.
-    /// @param poolId            keccak256(abi.encode(key)) for the pool.
-    /// @param epochLength       Duration of one epoch in seconds.
-    /// @param smoothingFee      Bps of swap fee diverted to buffer (max 5000).
-    /// @param inRangeMultiplier Weight for in-range vs out-of-range time (1-10).
     function configurePool(
         bytes32 poolId,
         uint64 epochLength,
@@ -105,7 +99,6 @@ contract Brook is BaseHook, IBrook {
     // ---------------------------------------------------------------------
 
     /// @notice The permission flags this hook advertises.
-    /// @dev The deployed address must encode these flags in its lowest 14 bits.
     function getHookPermissions()
         public
         pure
@@ -135,8 +128,6 @@ contract Brook is BaseHook, IBrook {
     // ---------------------------------------------------------------------
 
     /// @inheritdoc BaseHook
-    /// @dev Reads pending config set by configurePool, locks it permanently,
-    ///      and marks the pool as initialized.
     function _beforeInitialize(
         address,
         PoolKey calldata key,
@@ -171,9 +162,6 @@ contract Brook is BaseHook, IBrook {
 
     /// @inheritdoc BaseHook
     /// @dev Tracks LP entry when liquidity is added to a Brook pool.
-    ///      For new positions, initializes LPState with current timestamp.
-    ///      For existing positions, settles the current score at the old
-    ///      liquidity level before updating to the new amount.
     function _afterAddLiquidity(
         address sender,
         PoolKey calldata key,
@@ -182,27 +170,21 @@ contract Brook is BaseHook, IBrook {
         BalanceDelta,
         bytes calldata
     ) internal override returns (bytes4, BalanceDelta) {
-        bytes32 poolId     = keccak256(abi.encode(key));
+        bytes32 poolId      = keccak256(abi.encode(key));
         bytes32 positionKey = _derivePositionKey(sender, params);
 
         Types.LPState storage lp = _positions[poolId][positionKey];
         uint64 now_ = uint64(block.timestamp);
 
         if (lp.depositTime == 0) {
-            // New position — initialize state.
             lp.tickLower   = params.tickLower;
             lp.tickUpper   = params.tickUpper;
             lp.depositTime = now_;
             lp.lastTouched = now_;
-            lp.liquidity   = uint128(uint256(
-                lp.liquidity + uint128(uint256(int256(params.liquidityDelta)))
-            ));
+            lp.liquidity   = uint128(uint256(int256(params.liquidityDelta)));
         } else {
-            // Existing position — settle score at old liquidity, then update.
             _settleTime(poolId, positionKey, now_);
-            lp.liquidity = uint128(uint256(
-                lp.liquidity + uint128(uint256(int256(params.liquidityDelta)))
-            ));
+            lp.liquidity  += uint128(uint256(int256(params.liquidityDelta)));
             lp.lastTouched = now_;
         }
 
@@ -211,12 +193,65 @@ contract Brook is BaseHook, IBrook {
         return (BaseHook.afterAddLiquidity.selector, BalanceDelta.wrap(0));
     }
 
+    /// @inheritdoc BaseHook
+    /// @dev Settles accumulated time score before the liquidity changes.
+    ///      Called before the actual removal so position state is still intact.
+    function _beforeRemoveLiquidity(
+        address sender,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params,
+        bytes calldata
+    ) internal override returns (bytes4) {
+        bytes32 poolId      = keccak256(abi.encode(key));
+        bytes32 positionKey = _derivePositionKey(sender, params);
+        uint64 now_         = uint64(block.timestamp);
+
+        // Settle accumulated time up to this point.
+        _settleTime(poolId, positionKey, now_);
+
+        return BaseHook.beforeRemoveLiquidity.selector;
+    }
+
+    /// @inheritdoc BaseHook
+    /// @dev Updates liquidity after withdrawal. Marks position inactive if
+    ///      fully withdrawn but preserves state for any pending claim.
+    function _afterRemoveLiquidity(
+        address sender,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params,
+        BalanceDelta,
+        BalanceDelta,
+        bytes calldata
+    ) internal override returns (bytes4, BalanceDelta) {
+        bytes32 poolId      = keccak256(abi.encode(key));
+        bytes32 positionKey = _derivePositionKey(sender, params);
+
+        Types.LPState storage lp = _positions[poolId][positionKey];
+        uint64 now_ = uint64(block.timestamp);
+
+        // liquidityDelta is negative on removal — subtract the absolute value.
+        uint128 removed = uint128(uint256(int256(-params.liquidityDelta)));
+
+        if (removed >= lp.liquidity) {
+            // Full withdrawal — zero out liquidity but preserve pending claim.
+            lp.liquidity   = 0;
+            lp.lastTouched = now_;
+        } else {
+            // Partial withdrawal — reduce liquidity.
+            lp.liquidity  -= removed;
+            lp.lastTouched = now_;
+        }
+
+        emit LPWithdrawn(poolId, positionKey, sender, lp.liquidity);
+
+        return (BaseHook.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
+    }
+
     // ---------------------------------------------------------------------
     // Internal helpers
     // ---------------------------------------------------------------------
 
     /// @dev Derives a unique position key from sender address and tick range.
-    ///      Mirrors the v4 convention: keccak256(owner, tickLower, tickUpper, salt).
     function _derivePositionKey(
         address owner,
         ModifyLiquidityParams calldata params
@@ -230,8 +265,6 @@ contract Brook is BaseHook, IBrook {
     }
 
     /// @dev Lazily updates totalTime for a position up to the current timestamp.
-    ///      In-range tracking is added in PR #8 (lazy accumulator).
-    ///      For now we only accumulate totalTime.
     function _settleTime(
         bytes32 poolId,
         bytes32 positionKey,

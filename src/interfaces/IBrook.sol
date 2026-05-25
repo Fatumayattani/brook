@@ -45,6 +45,14 @@ interface IBrook {
       address indexed sender,
       uint128 liquidity
     );
+    /// @notice Emitted when an LP withdraws liquidity from a Brook pool.
+   event LPWithdrawn(
+      bytes32 indexed poolId,
+      bytes32 indexed positionKey,
+      address indexed sender,
+      uint128 remainingLiquidity
+   );
+
 
     // ---------------------------------------------------------------------
     // View functions
