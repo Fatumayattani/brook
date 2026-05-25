@@ -38,6 +38,13 @@ interface IBrook {
         uint16 inRangeMultiplier,
         uint64 startTime
     );
+    /// @notice Emitted when an LP deposits liquidity into a Brook pool.
+   event LPDeposited(
+      bytes32 indexed poolId,
+      bytes32 indexed positionKey,
+      address indexed sender,
+      uint128 liquidity
+    );
 
     // ---------------------------------------------------------------------
     // View functions
