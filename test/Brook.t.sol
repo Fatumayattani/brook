@@ -185,6 +185,23 @@ contract BrookTest is Test {
             address(this)
         );
     }
+    function _removeLiquidity(
+    PoolKey memory key,
+    int24 tickLower,
+    int24 tickUpper,
+    int256 liquidityDelta
+) internal {
+    router.addLiquidity(
+        key,
+        ModifyLiquidityParams({
+            tickLower:      tickLower,
+            tickUpper:      tickUpper,
+            liquidityDelta: -liquidityDelta,
+            salt:           bytes32(0)
+        }),
+        address(this)
+    );
+}
 
     // ---------------------------------------------------------------------
     // Deployment
@@ -431,6 +448,122 @@ function test_afterAddLiquidity_differentRangesAreIndependent() public {
     assertGt(lp1.liquidity, 0);
     assertGt(lp2.liquidity, 0);
     assertTrue(posKey1 != posKey2);
+}
+
+// ---------------------------------------------------------------------
+// beforeRemoveLiquidity + afterRemoveLiquidity
+// ---------------------------------------------------------------------
+
+function test_afterRemoveLiquidity_reducesLiquidity() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    int24 tickLower = -120;
+    int24 tickUpper =  120;
+
+    _addLiquidity(key, tickLower, tickUpper, 1000e6);
+
+    bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
+    Types.LPState memory before = brook.getLPState(id, posKey);
+    uint128 liquidityBefore = before.liquidity;
+
+    vm.warp(block.timestamp + 1 days);
+
+    _removeLiquidity(key, tickLower, tickUpper, 400e6);
+
+    Types.LPState memory after_ = brook.getLPState(id, posKey);
+    assertLt(after_.liquidity, liquidityBefore);
+    assertGt(after_.liquidity, 0);
+}
+
+function test_afterRemoveLiquidity_fullWithdrawalZerosLiquidity() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    int24 tickLower = -120;
+    int24 tickUpper =  120;
+
+    _addLiquidity(key, tickLower, tickUpper, 1000e6);
+
+    bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
+    Types.LPState memory lp = brook.getLPState(id, posKey);
+    uint128 fullAmount = lp.liquidity;
+
+    vm.warp(block.timestamp + 1 days);
+
+    _removeLiquidity(key, tickLower, tickUpper, int256(uint256(fullAmount)));
+
+    Types.LPState memory after_ = brook.getLPState(id, posKey);
+    assertEq(after_.liquidity, 0);
+}
+
+function test_beforeRemoveLiquidity_settlesTotalTime() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    int24 tickLower = -120;
+    int24 tickUpper =  120;
+
+    _addLiquidity(key, tickLower, tickUpper, 1000e6);
+
+    vm.warp(block.timestamp + 3 days);
+
+    _removeLiquidity(key, tickLower, tickUpper, 400e6);
+
+    bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
+    Types.LPState memory lp = brook.getLPState(id, posKey);
+
+    assertGt(lp.totalTime, 0);
+}
+
+function test_afterRemoveLiquidity_emitsLPWithdrawn() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    int24 tickLower = -120;
+    int24 tickUpper =  120;
+
+    _addLiquidity(key, tickLower, tickUpper, 1000e6);
+
+    bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
+
+    vm.warp(block.timestamp + 1 days);
+
+    vm.expectEmit(true, true, true, false);
+    emit IBrook.LPWithdrawn(id, posKey, address(router), 0);
+
+    _removeLiquidity(key, tickLower, tickUpper, 400e6);
+}
+
+function test_afterRemoveLiquidity_preservesStateAfterFullWithdrawal() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    int24 tickLower = -120;
+    int24 tickUpper =  120;
+
+    _addLiquidity(key, tickLower, tickUpper, 1000e6);
+
+    bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
+    Types.LPState memory lp = brook.getLPState(id, posKey);
+    uint128 fullAmount = lp.liquidity;
+
+    vm.warp(block.timestamp + 2 days);
+
+    _removeLiquidity(key, tickLower, tickUpper, int256(uint256(fullAmount)));
+
+    Types.LPState memory after_ = brook.getLPState(id, posKey);
+
+    // Liquidity is zero but state is preserved for pending claim
+    assertEq(after_.liquidity,  0);
+    assertGt(after_.totalTime,  0);
+    assertEq(after_.tickLower,  tickLower);
+    assertEq(after_.tickUpper,  tickUpper);
 }
 
     // ---------------------------------------------------------------------
