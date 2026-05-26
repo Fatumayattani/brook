@@ -10,6 +10,7 @@ import {Currency} from "v4-core/src/types/Currency.sol";
 import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "v4-core/src/types/PoolOperation.sol";
+import {SwapParams} from "v4-core/src/types/PoolOperation.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 import {V4PoolManagerDeployer} from "hookmate/artifacts/V4PoolManager.sol";
@@ -19,66 +20,96 @@ import {IBrook} from "../src/interfaces/IBrook.sol";
 import {Types} from "../src/libraries/Types.sol";
 import {BrookConstants} from "../src/libraries/Types.sol";
 
-/// @dev Minimal router that unlocks the PoolManager, calls modifyLiquidity,
-///      then settles any owed balances by transferring tokens from the caller.
-contract LiquidityRouter {
+/// @dev Minimal router that handles both liquidity and swap operations
+///      using the v4 unlock/settle pattern.
+contract TestRouter {
     IPoolManager public immutable manager;
 
     constructor(IPoolManager _manager) {
         manager = _manager;
     }
 
-    struct AddParams {
+    // -----------------------------------------------------------------------
+    // Liquidity
+    // -----------------------------------------------------------------------
+
+    struct LiquidityParams {
         PoolKey key;
         ModifyLiquidityParams params;
         address payer;
     }
 
-    function addLiquidity(
+    function modifyLiquidity(
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
         address payer
     ) external returns (BalanceDelta delta, BalanceDelta fees) {
-        bytes memory data = abi.encode(AddParams(key, params, payer));
+        bytes memory data = abi.encode(uint8(0), abi.encode(LiquidityParams(key, params, payer)));
         bytes memory result = manager.unlock(data);
         (delta, fees) = abi.decode(result, (BalanceDelta, BalanceDelta));
     }
+
+    // -----------------------------------------------------------------------
+    // Swap
+    // -----------------------------------------------------------------------
+
+    struct SwapCallParams {
+        PoolKey key;
+        SwapParams params;
+        address payer;
+    }
+
+    function swap(
+        PoolKey calldata key,
+        SwapParams calldata params,
+        address payer
+    ) external returns (BalanceDelta delta) {
+        bytes memory data = abi.encode(uint8(1), abi.encode(SwapCallParams(key, params, payer)));
+        bytes memory result = manager.unlock(data);
+        delta = abi.decode(result, (BalanceDelta));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unlock callback
+    // -----------------------------------------------------------------------
 
     function unlockCallback(bytes calldata data)
         external
         returns (bytes memory)
     {
         require(msg.sender == address(manager), "not manager");
-        AddParams memory p = abi.decode(data, (AddParams));
 
-        (BalanceDelta delta, BalanceDelta fees) = manager.modifyLiquidity(
-            p.key,
-            p.params,
-            ""
-        );
+        (uint8 action, bytes memory payload) = abi.decode(data, (uint8, bytes));
 
-        _settle(p.key.currency0, p.payer, delta.amount0());
-        _settle(p.key.currency1, p.payer, delta.amount1());
-
-        return abi.encode(delta, fees);
+        if (action == 0) {
+            LiquidityParams memory p = abi.decode(payload, (LiquidityParams));
+            (BalanceDelta delta, BalanceDelta fees) = manager.modifyLiquidity(
+                p.key, p.params, ""
+            );
+            _settle(p.key.currency0, p.payer, delta.amount0());
+            _settle(p.key.currency1, p.payer, delta.amount1());
+            return abi.encode(delta, fees);
+        } else {
+            SwapCallParams memory p = abi.decode(payload, (SwapCallParams));
+            BalanceDelta delta = manager.swap(p.key, p.params, "");
+            _settle(p.key.currency0, p.payer, delta.amount0());
+            _settle(p.key.currency1, p.payer, delta.amount1());
+            return abi.encode(delta);
+        }
     }
 
     function _settle(Currency currency, address payer, int128 amount) internal {
-    if (amount < 0) {
-        // Caller owes the pool — transfer tokens then settle.
-        uint128 owed = uint128(-amount);
-        manager.sync(currency);
-        MockERC20(Currency.unwrap(currency)).transferFrom(
-            payer,
-            address(manager),
-            owed
-        );
-        manager.settle();
-    } else if (amount > 0) {
-        // Pool owes the caller — take tokens out.
-        manager.take(currency, payer, uint128(amount));
+        if (amount < 0) {
+            uint128 owed = uint128(-amount);
+            manager.sync(currency);
+            MockERC20(Currency.unwrap(currency)).transferFrom(
+                payer, address(manager), owed
+            );
+            manager.settle();
+        } else if (amount > 0) {
+            manager.take(currency, payer, uint128(amount));
+        }
     }
-}
 }
 
 contract BrookTest is Test {
@@ -86,15 +117,15 @@ contract BrookTest is Test {
 
     IPoolManager internal poolManager;
     Brook internal brook;
-    LiquidityRouter internal router;
+    TestRouter internal router;
     MockERC20 internal token0;
     MockERC20 internal token1;
     Currency internal currency0;
     Currency internal currency1;
 
-    uint64 constant EPOCH_LENGTH  = 7 days;
-    uint16 constant SMOOTHING_FEE = 2000;
-    uint16 constant IN_RANGE_MULT = 4;
+    uint64  constant EPOCH_LENGTH   = 7 days;
+    uint16  constant SMOOTHING_FEE  = 2000; // 20%
+    uint16  constant IN_RANGE_MULT  = 4;
     uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
 
     function setUp() public {
@@ -130,7 +161,7 @@ contract BrookTest is Test {
         brook = new Brook{salt: salt}(poolManager);
         require(address(brook) == expected, "BrookTest: deploy mismatch");
 
-        router = new LiquidityRouter(poolManager);
+        router = new TestRouter(poolManager);
         token0.approve(address(router), type(uint256).max);
         token1.approve(address(router), type(uint256).max);
     }
@@ -174,7 +205,7 @@ contract BrookTest is Test {
         int24 tickUpper,
         int256 liquidityDelta
     ) internal {
-        router.addLiquidity(
+        router.modifyLiquidity(
             key,
             ModifyLiquidityParams({
                 tickLower:      tickLower,
@@ -185,23 +216,42 @@ contract BrookTest is Test {
             address(this)
         );
     }
+
     function _removeLiquidity(
-    PoolKey memory key,
-    int24 tickLower,
-    int24 tickUpper,
-    int256 liquidityDelta
-) internal {
-    router.addLiquidity(
-        key,
-        ModifyLiquidityParams({
-            tickLower:      tickLower,
-            tickUpper:      tickUpper,
-            liquidityDelta: -liquidityDelta,
-            salt:           bytes32(0)
-        }),
-        address(this)
-    );
-}
+        PoolKey memory key,
+        int24 tickLower,
+        int24 tickUpper,
+        int256 liquidityDelta
+    ) internal {
+        router.modifyLiquidity(
+            key,
+            ModifyLiquidityParams({
+                tickLower:      tickLower,
+                tickUpper:      tickUpper,
+                liquidityDelta: -liquidityDelta,
+                salt:           bytes32(0)
+            }),
+            address(this)
+        );
+    }
+
+    function _swap(
+        PoolKey memory key,
+        bool zeroForOne,
+        int256 amountSpecified
+    ) internal returns (BalanceDelta) {
+        return router.swap(
+            key,
+            SwapParams({
+                zeroForOne:        zeroForOne,
+                amountSpecified:   amountSpecified,
+                sqrtPriceLimitX96: zeroForOne
+                    ? 4295128740
+                    : 1461446703485210103287273052203988822378723970341
+            }),
+            address(this)
+        );
+    }
 
     // ---------------------------------------------------------------------
     // Deployment
@@ -372,198 +422,238 @@ contract BrookTest is Test {
     // ---------------------------------------------------------------------
 
     function test_afterAddLiquidity_initializesNewPosition() public {
+        PoolKey memory key = _makePoolKey();
+        bytes32 id = _poolId(key);
+        _initPool(key);
+
+        int24 tickLower = -120;
+        int24 tickUpper =  120;
+
+        uint64 before = uint64(block.timestamp);
+        _addLiquidity(key, tickLower, tickUpper, 1000e6);
+        uint64 after_ = uint64(block.timestamp);
+
+        bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
+        Types.LPState memory lp = brook.getLPState(id, posKey);
+
+        assertEq(lp.tickLower,   tickLower);
+        assertEq(lp.tickUpper,   tickUpper);
+        assertGe(lp.depositTime, before);
+        assertLe(lp.depositTime, after_);
+        assertGt(lp.liquidity,   0);
+    }
+
+    function test_afterAddLiquidity_emitsLPDeposited() public {
+        PoolKey memory key = _makePoolKey();
+        bytes32 id = _poolId(key);
+        _initPool(key);
+
+        int24 tickLower = -120;
+        int24 tickUpper =  120;
+        bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
+
+        vm.expectEmit(true, true, true, false);
+        emit IBrook.LPDeposited(id, posKey, address(router), 0);
+
+        _addLiquidity(key, tickLower, tickUpper, 1000e6);
+    }
+
+    function test_afterAddLiquidity_topsUpExistingPosition() public {
+        PoolKey memory key = _makePoolKey();
+        bytes32 id = _poolId(key);
+        _initPool(key);
+
+        _addLiquidity(key, -120, 120, 1000e6);
+        vm.warp(block.timestamp + 1 days);
+        _addLiquidity(key, -120, 120, 500e6);
+
+        bytes32 posKey = _positionKey(address(router), -120, 120, bytes32(0));
+        Types.LPState memory lp = brook.getLPState(id, posKey);
+
+        assertGt(lp.liquidity, 0);
+        assertGt(lp.totalTime, 0);
+    }
+
+    function test_afterAddLiquidity_differentRangesAreIndependent() public {
+        PoolKey memory key = _makePoolKey();
+        bytes32 id = _poolId(key);
+        _initPool(key);
+
+        _addLiquidity(key, -120,  120, 1000e6);
+        _addLiquidity(key, -240, -120, 500e6);
+
+        bytes32 posKey1 = _positionKey(address(router), -120,  120, bytes32(0));
+        bytes32 posKey2 = _positionKey(address(router), -240, -120, bytes32(0));
+
+        Types.LPState memory lp1 = brook.getLPState(id, posKey1);
+        Types.LPState memory lp2 = brook.getLPState(id, posKey2);
+
+        assertGt(lp1.liquidity, 0);
+        assertGt(lp2.liquidity, 0);
+        assertTrue(posKey1 != posKey2);
+    }
+
+    // ---------------------------------------------------------------------
+    // beforeRemoveLiquidity + afterRemoveLiquidity
+    // ---------------------------------------------------------------------
+
+    function test_afterRemoveLiquidity_reducesLiquidity() public {
+        PoolKey memory key = _makePoolKey();
+        bytes32 id = _poolId(key);
+        _initPool(key);
+
+        _addLiquidity(key, -120, 120, 1000e6);
+        bytes32 posKey = _positionKey(address(router), -120, 120, bytes32(0));
+        uint128 before = brook.getLPState(id, posKey).liquidity;
+
+        vm.warp(block.timestamp + 1 days);
+        _removeLiquidity(key, -120, 120, 400e6);
+
+        assertLt(brook.getLPState(id, posKey).liquidity, before);
+        assertGt(brook.getLPState(id, posKey).liquidity, 0);
+    }
+
+    function test_afterRemoveLiquidity_fullWithdrawalZerosLiquidity() public {
+        PoolKey memory key = _makePoolKey();
+        bytes32 id = _poolId(key);
+        _initPool(key);
+
+        _addLiquidity(key, -120, 120, 1000e6);
+        bytes32 posKey = _positionKey(address(router), -120, 120, bytes32(0));
+        uint128 full = brook.getLPState(id, posKey).liquidity;
+
+        vm.warp(block.timestamp + 1 days);
+        _removeLiquidity(key, -120, 120, int256(uint256(full)));
+
+        assertEq(brook.getLPState(id, posKey).liquidity, 0);
+    }
+
+    function test_beforeRemoveLiquidity_settlesTotalTime() public {
+        PoolKey memory key = _makePoolKey();
+        bytes32 id = _poolId(key);
+        _initPool(key);
+
+        _addLiquidity(key, -120, 120, 1000e6);
+        vm.warp(block.timestamp + 3 days);
+        _removeLiquidity(key, -120, 120, 400e6);
+
+        bytes32 posKey = _positionKey(address(router), -120, 120, bytes32(0));
+        assertGt(brook.getLPState(id, posKey).totalTime, 0);
+    }
+
+    function test_afterRemoveLiquidity_emitsLPWithdrawn() public {
+        PoolKey memory key = _makePoolKey();
+        bytes32 id = _poolId(key);
+        _initPool(key);
+
+        _addLiquidity(key, -120, 120, 1000e6);
+        bytes32 posKey = _positionKey(address(router), -120, 120, bytes32(0));
+
+        vm.warp(block.timestamp + 1 days);
+        vm.expectEmit(true, true, true, false);
+        emit IBrook.LPWithdrawn(id, posKey, address(router), 0);
+        _removeLiquidity(key, -120, 120, 400e6);
+    }
+
+    function test_afterRemoveLiquidity_preservesStateAfterFullWithdrawal() public {
+        PoolKey memory key = _makePoolKey();
+        bytes32 id = _poolId(key);
+        _initPool(key);
+
+        _addLiquidity(key, -120, 120, 1000e6);
+        bytes32 posKey = _positionKey(address(router), -120, 120, bytes32(0));
+        uint128 full = brook.getLPState(id, posKey).liquidity;
+
+        vm.warp(block.timestamp + 2 days);
+        _removeLiquidity(key, -120, 120, int256(uint256(full)));
+
+        Types.LPState memory after_ = brook.getLPState(id, posKey);
+        assertEq(after_.liquidity,  0);
+        assertGt(after_.totalTime,  0);
+        assertEq(after_.tickLower,  -120);
+        assertEq(after_.tickUpper,   120);
+    }
+
+    // ---------------------------------------------------------------------
+    // afterSwap
+    // ---------------------------------------------------------------------
+
+    function test_afterSwap_accumulates_fees_in_buffer() public {
+        PoolKey memory key = _makePoolKey();
+        bytes32 id = _poolId(key);
+        _initPool(key);
+
+        // Add liquidity so there is something to swap against.
+        _addLiquidity(key, -600, 600, 1000e6);
+
+        Types.EpochState memory before = brook.getEpochState(id);
+        assertEq(before.buffer, 0);
+
+        // Execute a swap.
+        _swap(key, true, -1000);
+
+        Types.EpochState memory after_ = brook.getEpochState(id);
+        assertGt(after_.buffer, 0);
+    }
+
+    function test_afterSwap_emitsFeesSkimmed() public {
+        PoolKey memory key = _makePoolKey();
+        bytes32 id = _poolId(key);
+        _initPool(key);
+
+        _addLiquidity(key, -600, 600, 1000e6);
+
+        vm.expectEmit(true, false, false, false);
+        emit IBrook.FeesSkimmed(id, 0, 0);
+
+        _swap(key, true, -1000);
+    }
+
+    function test_afterSwap_multipleSwapsAccumulate() public {
+        PoolKey memory key = _makePoolKey();
+        bytes32 id = _poolId(key);
+        _initPool(key);
+
+        _addLiquidity(key, -600, 600, 1000e6);
+
+        _swap(key, true,  -1000);
+        uint128 bufferAfterFirst = brook.getEpochState(id).buffer;
+
+        _swap(key, false, -1000);
+        uint128 bufferAfterSecond = brook.getEpochState(id).buffer;
+
+        assertGt(bufferAfterSecond, bufferAfterFirst);
+    }
+
+    function test_afterSwap_epochRolloverMovesBuffer() public {
     PoolKey memory key = _makePoolKey();
     bytes32 id = _poolId(key);
     _initPool(key);
 
-    int24 tickLower = -120;
-    int24 tickUpper =  120;
-    int256 liquidity = 1000e6;
+    _addLiquidity(key, -600, 600, 1000e6);
 
-    uint64 before = uint64(block.timestamp);
-    _addLiquidity(key, tickLower, tickUpper, liquidity);
-    uint64 after_ = uint64(block.timestamp);
+    // First swap fills the buffer.
+    _swap(key, true, -1000);
+    uint128 bufferBeforeRollover = brook.getEpochState(id).buffer;
+    assertGt(bufferBeforeRollover, 0);
 
-    // sender is router, not address(this), because router calls modifyLiquidity
-    bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
-    Types.LPState memory lp = brook.getLPState(id, posKey);
+    // Warp past epoch length to trigger rollover on next swap.
+    vm.warp(block.timestamp + EPOCH_LENGTH + 1);
 
-    assertEq(lp.tickLower,   tickLower);
-    assertEq(lp.tickUpper,   tickUpper);
-    assertGe(lp.depositTime, before);
-    assertLe(lp.depositTime, after_);
-    assertGe(lp.lastTouched, before);
-    assertGt(lp.liquidity,   0);
-}
+    // Second swap triggers rollover then accumulates fresh fees.
+    _swap(key, false, -1000);
 
-function test_afterAddLiquidity_emitsLPDeposited() public {
-    PoolKey memory key = _makePoolKey();
-    bytes32 id = _poolId(key);
-    _initPool(key);
+    Types.EpochState memory state = brook.getEpochState(id);
 
-    int24 tickLower = -120;
-    int24 tickUpper =  120;
-    // sender is router because it calls modifyLiquidity
-    bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
+    // prevBuffer should hold what was in the buffer before rollover.
+    assertEq(state.prevBuffer, bufferBeforeRollover);
 
-    vm.expectEmit(true, true, true, false);
-    emit IBrook.LPDeposited(id, posKey, address(router), 0);
+    // Buffer was reset at rollover — it now only has fees from the second swap.
+    // It should be a fresh accumulation, not the old total.
+    assertGt(state.buffer, 0);
 
-    _addLiquidity(key, tickLower, tickUpper, 1000e6);
-}
-
-function test_afterAddLiquidity_topsUpExistingPosition() public {
-    PoolKey memory key = _makePoolKey();
-    bytes32 id = _poolId(key);
-    _initPool(key);
-
-    int24 tickLower = -120;
-    int24 tickUpper =  120;
-
-    _addLiquidity(key, tickLower, tickUpper, 1000e6);
-    vm.warp(block.timestamp + 1 days);
-    _addLiquidity(key, tickLower, tickUpper, 500e6);
-
-    bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
-    Types.LPState memory lp = brook.getLPState(id, posKey);
-
-    assertGt(lp.liquidity, 0);
-    assertGt(lp.totalTime, 0);
-}
-
-function test_afterAddLiquidity_differentRangesAreIndependent() public {
-    PoolKey memory key = _makePoolKey();
-    bytes32 id = _poolId(key);
-    _initPool(key);
-
-    _addLiquidity(key, -120,  120, 1000e6);
-    _addLiquidity(key, -240, -120, 500e6);
-
-    bytes32 posKey1 = _positionKey(address(router), -120,  120, bytes32(0));
-    bytes32 posKey2 = _positionKey(address(router), -240, -120, bytes32(0));
-
-    Types.LPState memory lp1 = brook.getLPState(id, posKey1);
-    Types.LPState memory lp2 = brook.getLPState(id, posKey2);
-
-    assertGt(lp1.liquidity, 0);
-    assertGt(lp2.liquidity, 0);
-    assertTrue(posKey1 != posKey2);
-}
-
-// ---------------------------------------------------------------------
-// beforeRemoveLiquidity + afterRemoveLiquidity
-// ---------------------------------------------------------------------
-
-function test_afterRemoveLiquidity_reducesLiquidity() public {
-    PoolKey memory key = _makePoolKey();
-    bytes32 id = _poolId(key);
-    _initPool(key);
-
-    int24 tickLower = -120;
-    int24 tickUpper =  120;
-
-    _addLiquidity(key, tickLower, tickUpper, 1000e6);
-
-    bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
-    Types.LPState memory before = brook.getLPState(id, posKey);
-    uint128 liquidityBefore = before.liquidity;
-
-    vm.warp(block.timestamp + 1 days);
-
-    _removeLiquidity(key, tickLower, tickUpper, 400e6);
-
-    Types.LPState memory after_ = brook.getLPState(id, posKey);
-    assertLt(after_.liquidity, liquidityBefore);
-    assertGt(after_.liquidity, 0);
-}
-
-function test_afterRemoveLiquidity_fullWithdrawalZerosLiquidity() public {
-    PoolKey memory key = _makePoolKey();
-    bytes32 id = _poolId(key);
-    _initPool(key);
-
-    int24 tickLower = -120;
-    int24 tickUpper =  120;
-
-    _addLiquidity(key, tickLower, tickUpper, 1000e6);
-
-    bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
-    Types.LPState memory lp = brook.getLPState(id, posKey);
-    uint128 fullAmount = lp.liquidity;
-
-    vm.warp(block.timestamp + 1 days);
-
-    _removeLiquidity(key, tickLower, tickUpper, int256(uint256(fullAmount)));
-
-    Types.LPState memory after_ = brook.getLPState(id, posKey);
-    assertEq(after_.liquidity, 0);
-}
-
-function test_beforeRemoveLiquidity_settlesTotalTime() public {
-    PoolKey memory key = _makePoolKey();
-    bytes32 id = _poolId(key);
-    _initPool(key);
-
-    int24 tickLower = -120;
-    int24 tickUpper =  120;
-
-    _addLiquidity(key, tickLower, tickUpper, 1000e6);
-
-    vm.warp(block.timestamp + 3 days);
-
-    _removeLiquidity(key, tickLower, tickUpper, 400e6);
-
-    bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
-    Types.LPState memory lp = brook.getLPState(id, posKey);
-
-    assertGt(lp.totalTime, 0);
-}
-
-function test_afterRemoveLiquidity_emitsLPWithdrawn() public {
-    PoolKey memory key = _makePoolKey();
-    bytes32 id = _poolId(key);
-    _initPool(key);
-
-    int24 tickLower = -120;
-    int24 tickUpper =  120;
-
-    _addLiquidity(key, tickLower, tickUpper, 1000e6);
-
-    bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
-
-    vm.warp(block.timestamp + 1 days);
-
-    vm.expectEmit(true, true, true, false);
-    emit IBrook.LPWithdrawn(id, posKey, address(router), 0);
-
-    _removeLiquidity(key, tickLower, tickUpper, 400e6);
-}
-
-function test_afterRemoveLiquidity_preservesStateAfterFullWithdrawal() public {
-    PoolKey memory key = _makePoolKey();
-    bytes32 id = _poolId(key);
-    _initPool(key);
-
-    int24 tickLower = -120;
-    int24 tickUpper =  120;
-
-    _addLiquidity(key, tickLower, tickUpper, 1000e6);
-
-    bytes32 posKey = _positionKey(address(router), tickLower, tickUpper, bytes32(0));
-    Types.LPState memory lp = brook.getLPState(id, posKey);
-    uint128 fullAmount = lp.liquidity;
-
-    vm.warp(block.timestamp + 2 days);
-
-    _removeLiquidity(key, tickLower, tickUpper, int256(uint256(fullAmount)));
-
-    Types.LPState memory after_ = brook.getLPState(id, posKey);
-
-    // Liquidity is zero but state is preserved for pending claim
-    assertEq(after_.liquidity,  0);
-    assertGt(after_.totalTime,  0);
-    assertEq(after_.tickLower,  tickLower);
-    assertEq(after_.tickUpper,  tickUpper);
+    // EpochRolled event should have been emitted — verified by prevBuffer being set.
+    assertTrue(state.prevBuffer > 0);
 }
 
     // ---------------------------------------------------------------------

@@ -52,6 +52,19 @@ interface IBrook {
       address indexed sender,
       uint128 remainingLiquidity
    );
+   /// @notice Emitted when fees are skimmed into the epoch buffer after a swap.
+event FeesSkimmed(
+    bytes32 indexed poolId,
+    uint128 bufferTotal,
+    uint64  timestamp
+);
+
+/// @notice Emitted when an epoch rolls over.
+event EpochRolled(
+    bytes32 indexed poolId,
+    uint128 prevBuffer,
+    uint64  timestamp
+);
 
 
     // ---------------------------------------------------------------------
