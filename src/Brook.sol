@@ -6,7 +6,9 @@ import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
+import {Currency} from "v4-core/src/types/Currency.sol";
 import {ModifyLiquidityParams} from "v4-core/src/types/PoolOperation.sol";
+import {SwapParams} from "v4-core/src/types/PoolOperation.sol";
 
 import {IBrook} from "./interfaces/IBrook.sol";
 import {Types} from "./libraries/Types.sol";
@@ -161,7 +163,6 @@ contract Brook is BaseHook, IBrook {
     }
 
     /// @inheritdoc BaseHook
-    /// @dev Tracks LP entry when liquidity is added to a Brook pool.
     function _afterAddLiquidity(
         address sender,
         PoolKey calldata key,
@@ -194,8 +195,6 @@ contract Brook is BaseHook, IBrook {
     }
 
     /// @inheritdoc BaseHook
-    /// @dev Settles accumulated time score before the liquidity changes.
-    ///      Called before the actual removal so position state is still intact.
     function _beforeRemoveLiquidity(
         address sender,
         PoolKey calldata key,
@@ -204,17 +203,11 @@ contract Brook is BaseHook, IBrook {
     ) internal override returns (bytes4) {
         bytes32 poolId      = keccak256(abi.encode(key));
         bytes32 positionKey = _derivePositionKey(sender, params);
-        uint64 now_         = uint64(block.timestamp);
-
-        // Settle accumulated time up to this point.
-        _settleTime(poolId, positionKey, now_);
-
+        _settleTime(poolId, positionKey, uint64(block.timestamp));
         return BaseHook.beforeRemoveLiquidity.selector;
     }
 
     /// @inheritdoc BaseHook
-    /// @dev Updates liquidity after withdrawal. Marks position inactive if
-    ///      fully withdrawn but preserves state for any pending claim.
     function _afterRemoveLiquidity(
         address sender,
         PoolKey calldata key,
@@ -227,19 +220,14 @@ contract Brook is BaseHook, IBrook {
         bytes32 positionKey = _derivePositionKey(sender, params);
 
         Types.LPState storage lp = _positions[poolId][positionKey];
-        uint64 now_ = uint64(block.timestamp);
-
-        // liquidityDelta is negative on removal — subtract the absolute value.
         uint128 removed = uint128(uint256(int256(-params.liquidityDelta)));
 
         if (removed >= lp.liquidity) {
-            // Full withdrawal — zero out liquidity but preserve pending claim.
             lp.liquidity   = 0;
-            lp.lastTouched = now_;
+            lp.lastTouched = uint64(block.timestamp);
         } else {
-            // Partial withdrawal — reduce liquidity.
             lp.liquidity  -= removed;
-            lp.lastTouched = now_;
+            lp.lastTouched = uint64(block.timestamp);
         }
 
         emit LPWithdrawn(poolId, positionKey, sender, lp.liquidity);
@@ -247,9 +235,85 @@ contract Brook is BaseHook, IBrook {
         return (BaseHook.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
     }
 
+    /// @inheritdoc BaseHook
+    /// @dev Three things happen here in order:
+    ///      1. Check and trigger epoch rollover if enough time has passed.
+    ///      2. Skim smoothing fee from swap output into the epoch buffer.
+    ///         The hook calls poolManager.take() to claim the skimmed tokens,
+    ///         then returns the skim amount as the afterSwapReturnDelta so the
+    ///         PoolManager reduces the swapper's output accordingly.
+    ///      3. Update epoch lastUpdateTime.
+    function _afterSwap(
+        address,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta swapDelta,
+        bytes calldata
+    ) internal override returns (bytes4, int128) {
+        bytes32 poolId = keccak256(abi.encode(key));
+        Types.PoolConfig storage cfg = _config[poolId];
+        Types.EpochState storage epoch = _epoch[poolId];
+
+        // 1. Check and trigger epoch rollover.
+        uint64 now_ = uint64(block.timestamp);
+        if (
+            epoch.lastUpdateTime > 0 &&
+            now_ >= epoch.lastUpdateTime + cfg.epochLength
+        ) {
+            _rolloverEpoch(poolId, epoch);
+        }
+
+        // 2. Skim smoothing fee from swap output into buffer.
+        // Determine output currency based on swap direction.
+        // zeroForOne: swapper pays currency0, receives currency1.
+        // !zeroForOne: swapper pays currency1, receives currency0.
+        int128 feeSkimAmount = 0;
+
+        int128 outputAmount = params.zeroForOne
+            ? swapDelta.amount1()  // currency1 leaving pool
+            : swapDelta.amount0(); // currency0 leaving pool
+
+        if (outputAmount > 0) {
+            uint128 fee = uint128(
+                uint256(uint128(outputAmount)) * cfg.smoothingFee / 10000
+            );
+            if (fee > 0) {
+                // Take the fee into this hook contract.
+                Currency feeCurrency = params.zeroForOne
+                    ? key.currency1
+                    : key.currency0;
+                poolManager.take(feeCurrency, address(this), fee);
+
+                epoch.buffer += fee;
+                feeSkimAmount = int128(fee);
+            }
+        }
+
+        // 3. Update last interaction timestamp.
+        epoch.lastUpdateTime = now_;
+
+        emit FeesSkimmed(poolId, epoch.buffer, now_);
+
+        return (BaseHook.afterSwap.selector, feeSkimAmount);
+    }
+
     // ---------------------------------------------------------------------
     // Internal helpers
     // ---------------------------------------------------------------------
+
+    /// @dev Rolls the current buffer into prevBuffer and starts a fresh epoch.
+    function _rolloverEpoch(
+        bytes32 poolId,
+        Types.EpochState storage epoch
+    ) internal {
+        uint128 prevBuffer    = epoch.buffer;
+        epoch.prevBuffer      = prevBuffer;
+        epoch.buffer          = 0;
+        epoch.totalScore      = 0;
+        epoch.lastUpdateTime  = uint64(block.timestamp);
+
+        emit EpochRolled(poolId, prevBuffer, uint64(block.timestamp));
+    }
 
     /// @dev Derives a unique position key from sender address and tick range.
     function _derivePositionKey(
