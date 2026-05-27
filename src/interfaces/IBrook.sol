@@ -26,6 +26,12 @@ interface IBrook {
     /// @notice Thrown when configurePool is called on an already initialized pool.
     error PoolAlreadyInitialized(bytes32 poolId);
 
+    /// @notice Thrown when claim is called before any epoch has rolled over.
+    error EpochNotYetComplete(bytes32 poolId);
+
+    /// @notice Thrown when an LP has nothing to claim.
+    error NothingToClaim(bytes32 poolId, bytes32 positionKey);
+
     // ---------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------
@@ -33,39 +39,49 @@ interface IBrook {
     /// @notice Emitted when a pool is successfully initialized with Brook.
     event PoolInitialized(
         bytes32 indexed poolId,
-        uint64 epochLength,
-        uint16 smoothingFee,
-        uint16 inRangeMultiplier,
-        uint64 startTime
+        uint64  epochLength,
+        uint16  smoothingFee,
+        uint16  inRangeMultiplier,
+        uint64  startTime
     );
+
     /// @notice Emitted when an LP deposits liquidity into a Brook pool.
-   event LPDeposited(
-      bytes32 indexed poolId,
-      bytes32 indexed positionKey,
-      address indexed sender,
-      uint128 liquidity
+    event LPDeposited(
+        bytes32 indexed poolId,
+        bytes32 indexed positionKey,
+        address indexed sender,
+        uint128 liquidity
     );
+
     /// @notice Emitted when an LP withdraws liquidity from a Brook pool.
-   event LPWithdrawn(
-      bytes32 indexed poolId,
-      bytes32 indexed positionKey,
-      address indexed sender,
-      uint128 remainingLiquidity
-   );
-   /// @notice Emitted when fees are skimmed into the epoch buffer after a swap.
-event FeesSkimmed(
-    bytes32 indexed poolId,
-    uint128 bufferTotal,
-    uint64  timestamp
-);
+    event LPWithdrawn(
+        bytes32 indexed poolId,
+        bytes32 indexed positionKey,
+        address indexed sender,
+        uint128 remainingLiquidity
+    );
 
-/// @notice Emitted when an epoch rolls over.
-event EpochRolled(
-    bytes32 indexed poolId,
-    uint128 prevBuffer,
-    uint64  timestamp
-);
+    /// @notice Emitted when fees are skimmed into the epoch buffer after a swap.
+    event FeesSkimmed(
+        bytes32 indexed poolId,
+        uint128 bufferTotal,
+        uint64  timestamp
+    );
 
+    /// @notice Emitted when an epoch rolls over.
+    event EpochRolled(
+        bytes32 indexed poolId,
+        uint128 prevBuffer,
+        uint64  timestamp
+    );
+
+    /// @notice Emitted when an LP successfully claims yield.
+    event YieldClaimed(
+        bytes32 indexed poolId,
+        bytes32 indexed positionKey,
+        address indexed recipient,
+        uint256 amount
+    );
 
     // ---------------------------------------------------------------------
     // View functions
