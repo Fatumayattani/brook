@@ -656,6 +656,143 @@ contract BrookTest is Test {
     assertTrue(state.prevBuffer > 0);
 }
 
+// ---------------------------------------------------------------------
+// claim
+// ---------------------------------------------------------------------
+
+function test_claim_revertsIfPoolNotInitialized() public {
+    bytes32 fakePoolId = keccak256("fake");
+    bytes32 fakePosKey = keccak256("fake-pos");
+
+    vm.expectRevert(
+        abi.encodeWithSelector(IBrook.PoolNotConfigured.selector, fakePoolId)
+    );
+    brook.claim(fakePoolId, fakePosKey, address(this));
+}
+
+function test_claim_revertsIfNoEpochComplete() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    _addLiquidity(key, -600, 600, 1000e6);
+
+    bytes32 posKey = _positionKey(address(router), -600, 600, bytes32(0));
+
+    vm.expectRevert(
+        abi.encodeWithSelector(IBrook.EpochNotYetComplete.selector, id)
+    );
+    brook.claim(id, posKey, address(this));
+}
+
+function test_claim_revertsIfNothingToClaim() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    _addLiquidity(key, -600, 600, 1000e6);
+    _swap(key, true, -1000);
+
+    vm.warp(block.timestamp + EPOCH_LENGTH + 1);
+    _swap(key, false, -1000);
+
+    bytes32 fakePosKey = keccak256("nonexistent");
+
+    vm.expectRevert(
+        abi.encodeWithSelector(IBrook.NothingToClaim.selector, id, fakePosKey)
+    );
+    brook.claim(id, fakePosKey, address(this));
+}
+
+function test_claim_payoutAfterEpochRollover() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    _addLiquidity(key, -600, 600, 1000e6);
+
+    // Fill the buffer with swap fees.
+    _swap(key, true, -1000);
+    _swap(key, false, -1000);
+    _swap(key, true, -1000);
+
+    uint128 bufferBeforeRollover = brook.getEpochState(id).buffer;
+    assertGt(bufferBeforeRollover, 0);
+
+    // Warp past epoch to trigger rollover.
+    vm.warp(block.timestamp + EPOCH_LENGTH + 1);
+
+    // Trigger rollover via swap.
+    _swap(key, false, -1000);
+
+    assertEq(brook.getEpochState(id).prevBuffer, bufferBeforeRollover);
+
+    bytes32 posKey = _positionKey(address(router), -600, 600, bytes32(0));
+
+    // Warp halfway through next epoch so some yield has vested.
+    vm.warp(block.timestamp + EPOCH_LENGTH / 2);
+
+    address recipient = makeAddr("recipient");
+    uint256 balanceBefore = token1.balanceOf(recipient);
+
+    brook.claim(id, posKey, recipient);
+
+    uint256 balanceAfter = token1.balanceOf(recipient);
+    assertGt(balanceAfter, balanceBefore);
+}
+
+function test_claim_emitsYieldClaimed() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    _addLiquidity(key, -600, 600, 1000e6);
+    _swap(key, true, -1000);
+
+    vm.warp(block.timestamp + EPOCH_LENGTH + 1);
+    _swap(key, false, -1000);
+
+    bytes32 posKey = _positionKey(address(router), -600, 600, bytes32(0));
+
+    vm.warp(block.timestamp + EPOCH_LENGTH / 2);
+
+    vm.expectEmit(true, true, true, false);
+    emit IBrook.YieldClaimed(id, posKey, address(this), 0);
+
+    brook.claim(id, posKey, address(this));
+}
+
+function test_claim_secondClaimOnlyVestsAdditional() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    _addLiquidity(key, -600, 600, 1000e6);
+    _swap(key, true, -1000);
+
+    vm.warp(block.timestamp + EPOCH_LENGTH + 1);
+    _swap(key, false, -1000);
+
+    bytes32 posKey = _positionKey(address(router), -600, 600, bytes32(0));
+
+    address recipient = makeAddr("recipient");
+
+    // First claim at 25% of epoch.
+    vm.warp(block.timestamp + EPOCH_LENGTH / 4);
+    brook.claim(id, posKey, recipient);
+    uint256 firstClaim = token1.balanceOf(recipient);
+    assertGt(firstClaim, 0);
+
+    // Second claim at 50% of epoch.
+    vm.warp(block.timestamp + EPOCH_LENGTH / 4);
+    brook.claim(id, posKey, recipient);
+    uint256 secondClaim = token1.balanceOf(recipient) - firstClaim;
+    assertGt(secondClaim, 0);
+
+    // Both claims together should be less than or equal to the full share.
+    assertLe(firstClaim + secondClaim, uint256(brook.getEpochState(id).prevBuffer));
+}
+
     // ---------------------------------------------------------------------
     // Permission flags
     // ---------------------------------------------------------------------
