@@ -5,10 +5,12 @@ import {BaseHook} from "@openzeppelin/uniswap-hooks/src/base/BaseHook.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {Currency, CurrencyLibrary} from "v4-core/src/types/Currency.sol";
 import {ModifyLiquidityParams} from "v4-core/src/types/PoolOperation.sol";
 import {SwapParams} from "v4-core/src/types/PoolOperation.sol";
+import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 
 import {IBrook} from "./interfaces/IBrook.sol";
 import {Types} from "./libraries/Types.sol";
@@ -17,42 +19,22 @@ import {ScoreLib} from "./libraries/ScoreLib.sol";
 
 /// @title Brook
 /// @notice A Uniswap v4 hook for predictable, paycheck-style LP yield.
-/// @dev Captures swap fees into a per-epoch buffer, then streams the previous
-///      epoch's buffer to LPs over the next epoch, weighted by useful liquidity.
-///
-///      Pool creation flow (two steps):
-///      1. Call configurePool(poolId, epochLength, smoothingFee, multiplier)
-///      2. Call poolManager.initialize(key, sqrtPriceX96)
-///         beforeInitialize fires, reads pending config, locks it permanently.
 contract Brook is BaseHook, IBrook {
     using CurrencyLibrary for Currency;
+    using PoolIdLibrary for PoolKey;
+    using StateLibrary for IPoolManager;
 
     // ---------------------------------------------------------------------
     // State
     // ---------------------------------------------------------------------
 
-    /// @notice Per-pool immutable configuration.
     mapping(bytes32 poolId => Types.PoolConfig) internal _config;
-
-    /// @notice Per-pool epoch state.
     mapping(bytes32 poolId => Types.EpochState) internal _epoch;
-
-    /// @notice Per-LP-position state.
     mapping(bytes32 poolId => mapping(bytes32 positionKey => Types.LPState)) internal _positions;
-
-    /// @notice Pending config set by configurePool before pool initialization.
     mapping(bytes32 poolId => Types.PoolConfig) internal _pendingConfig;
-
-    /// @notice Tracks which pools have been initialized by Brook.
     mapping(bytes32 poolId => bool) internal _initialized;
-
-    /// @notice Last claim timestamp per LP position.
     mapping(bytes32 poolId => mapping(bytes32 positionKey => uint64)) internal _lastClaimTime;
-
-    /// @notice Fee currency per pool, set on first swap, used for payouts.
     mapping(bytes32 poolId => Currency) internal _feeCurrency;
-
-    /// @notice Reentrancy guard flag.
     bool internal _locked;
 
     // ---------------------------------------------------------------------
@@ -76,8 +58,6 @@ contract Brook is BaseHook, IBrook {
     // Pool configuration
     // ---------------------------------------------------------------------
 
-    /// @notice Set pool parameters before calling poolManager.initialize.
-    /// @dev Must be called before initialize. Can only be set once per pool.
     function configurePool(
         bytes32 poolId,
         uint64 epochLength,
@@ -122,7 +102,6 @@ contract Brook is BaseHook, IBrook {
     // Hook permissions
     // ---------------------------------------------------------------------
 
-    /// @notice The permission flags this hook advertises.
     function getHookPermissions()
         public
         pure
@@ -151,7 +130,6 @@ contract Brook is BaseHook, IBrook {
     // Hook callbacks
     // ---------------------------------------------------------------------
 
-    /// @inheritdoc BaseHook
     function _beforeInitialize(
         address,
         PoolKey calldata key,
@@ -184,7 +162,6 @@ contract Brook is BaseHook, IBrook {
         return BaseHook.beforeInitialize.selector;
     }
 
-    /// @inheritdoc BaseHook
     function _afterAddLiquidity(
         address sender,
         PoolKey calldata key,
@@ -195,7 +172,6 @@ contract Brook is BaseHook, IBrook {
     ) internal override returns (bytes4, BalanceDelta) {
         bytes32 poolId      = keccak256(abi.encode(key));
         bytes32 positionKey = _derivePositionKey(sender, params);
-
         Types.LPState storage lp = _positions[poolId][positionKey];
         uint64 now_ = uint64(block.timestamp);
 
@@ -212,11 +188,9 @@ contract Brook is BaseHook, IBrook {
         }
 
         emit LPDeposited(poolId, positionKey, sender, lp.liquidity);
-
         return (BaseHook.afterAddLiquidity.selector, BalanceDelta.wrap(0));
     }
 
-    /// @inheritdoc BaseHook
     function _beforeRemoveLiquidity(
         address sender,
         PoolKey calldata key,
@@ -229,7 +203,6 @@ contract Brook is BaseHook, IBrook {
         return BaseHook.beforeRemoveLiquidity.selector;
     }
 
-    /// @inheritdoc BaseHook
     function _afterRemoveLiquidity(
         address sender,
         PoolKey calldata key,
@@ -240,7 +213,6 @@ contract Brook is BaseHook, IBrook {
     ) internal override returns (bytes4, BalanceDelta) {
         bytes32 poolId      = keccak256(abi.encode(key));
         bytes32 positionKey = _derivePositionKey(sender, params);
-
         Types.LPState storage lp = _positions[poolId][positionKey];
         uint128 removed = uint128(uint256(int256(-params.liquidityDelta)));
 
@@ -253,15 +225,9 @@ contract Brook is BaseHook, IBrook {
         }
 
         emit LPWithdrawn(poolId, positionKey, sender, lp.liquidity);
-
         return (BaseHook.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
     }
 
-    /// @inheritdoc BaseHook
-    /// @dev Three things happen here in order:
-    ///      1. Check and trigger epoch rollover if enough time has passed.
-    ///      2. Skim smoothing fee from swap output into the epoch buffer.
-    ///      3. Update epoch lastUpdateTime.
     function _afterSwap(
         address,
         PoolKey calldata key,
@@ -270,11 +236,25 @@ contract Brook is BaseHook, IBrook {
         bytes calldata
     ) internal override returns (bytes4, int128) {
         bytes32 poolId = keccak256(abi.encode(key));
+        _processSwap(poolId, key, params, swapDelta);
+        return (BaseHook.afterSwap.selector, _epoch[poolId].lastSkimAmount);
+    }
+
+    // ---------------------------------------------------------------------
+    // Swap processing (extracted to avoid stack-too-deep)
+    // ---------------------------------------------------------------------
+
+    function _processSwap(
+        bytes32 poolId,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta swapDelta
+    ) internal {
         Types.PoolConfig storage cfg   = _config[poolId];
         Types.EpochState storage epoch = _epoch[poolId];
-
-        // 1. Check and trigger epoch rollover.
         uint64 now_ = uint64(block.timestamp);
+
+        // 1. Epoch rollover.
         if (
             epoch.lastUpdateTime > 0 &&
             now_ >= epoch.lastUpdateTime + cfg.epochLength
@@ -282,8 +262,10 @@ contract Brook is BaseHook, IBrook {
             _rolloverEpoch(poolId, epoch);
         }
 
-        // 2. Skim smoothing fee from swap output.
-        int128 feeSkimAmount = 0;
+        // 2. Reset skim amount for this swap.
+        epoch.lastSkimAmount = 0;
+
+        // 3. Fee skim.
         Currency feeCurrency = params.zeroForOne ? key.currency1 : key.currency0;
         int128 outputAmount  = params.zeroForOne
             ? swapDelta.amount1()
@@ -295,34 +277,29 @@ contract Brook is BaseHook, IBrook {
             );
             if (fee > 0) {
                 poolManager.take(feeCurrency, address(this), fee);
-                epoch.buffer += fee;
-                feeSkimAmount = int128(fee);
+                epoch.buffer         += fee;
+                epoch.lastSkimAmount  = int128(fee);
 
-                // Record fee currency for this pool on first swap.
                 if (Currency.unwrap(_feeCurrency[poolId]) == address(0)) {
                     _feeCurrency[poolId] = feeCurrency;
                 }
             }
         }
 
-        // 3. Update last interaction timestamp.
+        // 4. Record current tick for in-range accumulator.
+        (, int24 tick,,) = poolManager.getSlot0(key.toId());
+        epoch.currentTick = tick;
+
+        // 5. Update timestamp.
         epoch.lastUpdateTime = now_;
 
         emit FeesSkimmed(poolId, epoch.buffer, now_);
-
-        return (BaseHook.afterSwap.selector, feeSkimAmount);
     }
 
     // ---------------------------------------------------------------------
     // Claim
     // ---------------------------------------------------------------------
 
-    /// @notice Claims vested yield from the previous epoch's buffer.
-    /// @dev Score is computed lazily at claim time using accumulated time data.
-    ///      Yield streams linearly over the epoch length.
-    /// @param poolId      keccak256(abi.encode(key)) for the pool.
-    /// @param positionKey keccak256(abi.encode(owner, tickLower, tickUpper, salt)).
-    /// @param recipient   Address to send the claimed yield to.
     function claim(
         bytes32 poolId,
         bytes32 positionKey,
@@ -331,31 +308,23 @@ contract Brook is BaseHook, IBrook {
         if (!_initialized[poolId]) revert PoolNotConfigured(poolId);
 
         Types.EpochState storage epoch = _epoch[poolId];
-
         if (epoch.prevBuffer == 0) revert EpochNotYetComplete(poolId);
 
         Types.LPState storage lp = _positions[poolId][positionKey];
-
         if (lp.totalTime == 0 && lp.liquidity == 0)
             revert NothingToClaim(poolId, positionKey);
 
         _settleTime(poolId, positionKey, uint64(block.timestamp));
 
         uint256 vested = _computeVested(poolId, positionKey);
-
         if (vested == 0) revert NothingToClaim(poolId, positionKey);
 
-        // Update state before transfer (checks-effects-interactions).
         _lastClaimTime[poolId][positionKey] = uint64(block.timestamp);
-
-        // Transfer yield to recipient.
         _feeCurrency[poolId].transfer(recipient, vested);
 
         emit YieldClaimed(poolId, positionKey, recipient, vested);
     }
 
-    /// @dev Computes the vested yield for a position.
-    ///      Extracted to avoid stack-too-deep in claim().
     function _computeVested(
         bytes32 poolId,
         bytes32 positionKey
@@ -392,7 +361,6 @@ contract Brook is BaseHook, IBrook {
 
         vested = ScoreLib.computeVested(share, elapsed, cfg.epochLength);
 
-        // Update totalScore on first claim of this epoch.
         if (epoch.totalScore == 0) {
             epoch.totalScore = uint64(lpScore);
         }
@@ -402,7 +370,6 @@ contract Brook is BaseHook, IBrook {
     // Internal helpers
     // ---------------------------------------------------------------------
 
-    /// @dev Rolls the current buffer into prevBuffer and starts a fresh epoch.
     function _rolloverEpoch(
         bytes32 poolId,
         Types.EpochState storage epoch
@@ -416,7 +383,6 @@ contract Brook is BaseHook, IBrook {
         emit EpochRolled(poolId, prevBuffer, uint64(block.timestamp));
     }
 
-    /// @dev Derives a unique position key from sender address and tick range.
     function _derivePositionKey(
         address owner,
         ModifyLiquidityParams calldata params
@@ -429,17 +395,26 @@ contract Brook is BaseHook, IBrook {
         ));
     }
 
-    /// @dev Lazily updates totalTime for a position up to the current timestamp.
     function _settleTime(
         bytes32 poolId,
         bytes32 positionKey,
         uint64 now_
     ) internal {
-        Types.LPState storage lp = _positions[poolId][positionKey];
+        Types.LPState storage lp    = _positions[poolId][positionKey];
+        Types.EpochState storage ep = _epoch[poolId];
+
         if (lp.lastTouched == 0 || now_ <= lp.lastTouched) return;
 
         uint64 elapsed = now_ - lp.lastTouched;
         lp.totalTime  += elapsed;
+
+        if (
+            ep.currentTick >= lp.tickLower &&
+            ep.currentTick < lp.tickUpper
+        ) {
+            lp.inRangeTime += elapsed;
+        }
+
         lp.lastTouched = now_;
     }
 
@@ -447,50 +422,30 @@ contract Brook is BaseHook, IBrook {
     // View functions
     // ---------------------------------------------------------------------
 
-    /// @inheritdoc IBrook
     function getPoolConfig(bytes32 poolId)
         external view override returns (Types.PoolConfig memory)
-    {
-        return _config[poolId];
-    }
+    { return _config[poolId]; }
 
-    /// @inheritdoc IBrook
     function getEpochState(bytes32 poolId)
         external view override returns (Types.EpochState memory)
-    {
-        return _epoch[poolId];
-    }
+    { return _epoch[poolId]; }
 
-    /// @inheritdoc IBrook
     function getLPState(bytes32 poolId, bytes32 positionKey)
         external view override returns (Types.LPState memory)
-    {
-        return _positions[poolId][positionKey];
-    }
+    { return _positions[poolId][positionKey]; }
 
-    /// @notice Returns true if a pool has been initialized with Brook.
-    function isInitialized(bytes32 poolId) external view returns (bool) {
-        return _initialized[poolId];
-    }
+    function isInitialized(bytes32 poolId) external view returns (bool)
+    { return _initialized[poolId]; }
 
-    /// @notice Returns the pending config for a pool not yet initialized.
     function getPendingConfig(bytes32 poolId)
         external view returns (Types.PoolConfig memory)
-    {
-        return _pendingConfig[poolId];
-    }
+    { return _pendingConfig[poolId]; }
 
-    /// @notice Returns the last claim timestamp for a position.
     function getLastClaimTime(bytes32 poolId, bytes32 positionKey)
         external view returns (uint64)
-    {
-        return _lastClaimTime[poolId][positionKey];
-    }
+    { return _lastClaimTime[poolId][positionKey]; }
 
-    /// @notice Returns the fee currency for a pool.
     function getFeeCurrency(bytes32 poolId)
         external view returns (Currency)
-    {
-        return _feeCurrency[poolId];
-    }
+    { return _feeCurrency[poolId]; }
 }

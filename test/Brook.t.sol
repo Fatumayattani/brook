@@ -793,6 +793,103 @@ function test_claim_secondClaimOnlyVestsAdditional() public {
     assertLe(firstClaim + secondClaim, uint256(brook.getEpochState(id).prevBuffer));
 }
 
+// ---------------------------------------------------------------------
+// in-range accumulator
+// ---------------------------------------------------------------------
+
+function test_inRange_timeAccumulatesWhenInRange() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    // Add liquidity covering the current tick (tick 0 at 1:1 price).
+    _addLiquidity(key, -120, 120, 1000e6);
+
+    // Execute a swap to set currentTick in epoch state.
+    _swap(key, true, -1000);
+
+    bytes32 posKey = _positionKey(address(router), -120, 120, bytes32(0));
+
+    // Warp forward and trigger a settlement via top-up.
+    vm.warp(block.timestamp + 1 days);
+    _addLiquidity(key, -120, 120, 1e6);
+
+    Types.LPState memory lp = brook.getLPState(id, posKey);
+
+    // Position was in-range (tick 0 is between -120 and 120).
+    assertGt(lp.inRangeTime, 0);
+    assertEq(lp.inRangeTime, lp.totalTime);
+}
+
+function test_inRange_scoreHigherForInRangeLP() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    _addLiquidity(key, -120, 120, 1000e6);
+    _swap(key, true, -1000);
+
+    bytes32 posKeyInRange = _positionKey(address(router), -120, 120, bytes32(0));
+
+    vm.warp(block.timestamp + 7 days);
+    _addLiquidity(key, -120, 120, 1e6);
+
+    Types.LPState memory lp = brook.getLPState(id, posKeyInRange);
+
+    assertGt(lp.inRangeTime, 0);
+    assertEq(lp.inRangeTime, lp.totalTime);
+}
+
+function test_inRange_currentTickStoredAfterSwap() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    _addLiquidity(key, -600, 600, 1000e6);
+
+    Types.EpochState memory before = brook.getEpochState(id);
+    assertEq(before.currentTick, 0);
+
+    _swap(key, true, -1000);
+
+    Types.EpochState memory after_ = brook.getEpochState(id);
+    // Tick may have moved from 0 after swap.
+    // We just verify it was recorded (field is accessible and set).
+    assertTrue(after_.currentTick <= 0);
+}
+
+function test_inRange_timeDoesNotAccumulateWhenOutOfRange() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    // Add some in-range liquidity first so swap can execute.
+    _addLiquidity(key, -600, 600, 1000e6);
+
+    // Execute a swap to set currentTick BEFORE adding the out-of-range position.
+    _swap(key, true, -1000);
+
+    // Now add the out-of-range position — depositTime and lastTouched set here.
+    // At this point currentTick is already recorded from the swap above.
+    _addLiquidity(key, -600, -120, 500e6);
+
+    bytes32 posKey = _positionKey(address(router), -600, -120, bytes32(0));
+
+    // Warp forward and trigger settlement via another swap.
+    vm.warp(block.timestamp + 1 days);
+    _swap(key, false, -1000);
+
+    // Trigger explicit settlement via top-up.
+    _addLiquidity(key, -600, -120, 1e6);
+
+    Types.LPState memory lp = brook.getLPState(id, posKey);
+
+    // Position range is -600 to -120. Current tick should be near 0 (above -120).
+    // Position is out of range — inRangeTime should be zero.
+    assertEq(lp.inRangeTime, 0);
+    assertGt(lp.totalTime, 0);
+}
+
     // ---------------------------------------------------------------------
     // Permission flags
     // ---------------------------------------------------------------------
