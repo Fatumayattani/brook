@@ -890,6 +890,90 @@ function test_inRange_timeDoesNotAccumulateWhenOutOfRange() public {
     assertGt(lp.totalTime, 0);
 }
 
+// ---------------------------------------------------------------------
+// hardening
+// ---------------------------------------------------------------------
+
+function test_claim_revertsOnZeroAddressRecipient() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    _addLiquidity(key, -600, 600, 1000e6);
+    _swap(key, true, -1000);
+
+    vm.warp(block.timestamp + EPOCH_LENGTH + 1);
+    _swap(key, false, -1000);
+
+    bytes32 posKey = _positionKey(address(router), -600, 600, bytes32(0));
+
+    vm.warp(block.timestamp + EPOCH_LENGTH / 2);
+
+    vm.expectRevert(IBrook.InvalidRecipient.selector);
+    brook.claim(id, posKey, address(0));
+}
+
+function test_computePositionKey_matchesDerived() public view {
+    // The position key computed externally must match what Brook stores internally.
+    int24 tickLower = -120;
+    int24 tickUpper =  120;
+    bytes32 salt    = bytes32(0);
+
+    bytes32 computed = brook.computePositionKey(
+        address(router),
+        tickLower,
+        tickUpper,
+        salt
+    );
+
+    bytes32 expected = keccak256(abi.encode(
+        address(router),
+        tickLower,
+        tickUpper,
+        salt
+    ));
+
+    assertEq(computed, expected);
+}
+
+function test_computePositionKey_differentSendersDifferentKeys() public view {
+    bytes32 key1 = brook.computePositionKey(address(0x1), -120, 120, bytes32(0));
+    bytes32 key2 = brook.computePositionKey(address(0x2), -120, 120, bytes32(0));
+
+    assertTrue(key1 != key2);
+}
+
+function test_computePositionKey_differentRangesDifferentKeys() public view {
+    bytes32 key1 = brook.computePositionKey(address(router), -120,  120, bytes32(0));
+    bytes32 key2 = brook.computePositionKey(address(router), -240, -120, bytes32(0));
+
+    assertTrue(key1 != key2);
+}
+
+function test_configurePool_anyoneCanConfigure() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+
+    // A random address can configure a pool.
+    address randomCaller = makeAddr("random");
+    vm.prank(randomCaller);
+    brook.configurePool(id, EPOCH_LENGTH, SMOOTHING_FEE, IN_RANGE_MULT);
+
+    Types.PoolConfig memory pending = brook.getPendingConfig(id);
+    assertEq(pending.epochLength, EPOCH_LENGTH);
+}
+
+function test_configurePool_cannotReconfigureAfterInit() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    vm.expectRevert(
+        abi.encodeWithSelector(IBrook.PoolAlreadyInitialized.selector, id)
+    );
+    brook.configurePool(id, EPOCH_LENGTH, SMOOTHING_FEE, IN_RANGE_MULT);
+}
+
     // ---------------------------------------------------------------------
     // Permission flags
     // ---------------------------------------------------------------------

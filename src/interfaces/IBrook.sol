@@ -32,6 +32,9 @@ interface IBrook {
     /// @notice Thrown when an LP has nothing to claim.
     error NothingToClaim(bytes32 poolId, bytes32 positionKey);
 
+    /// @notice Thrown when claim is called with a zero address recipient.
+    error InvalidRecipient();
+
     // ---------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------

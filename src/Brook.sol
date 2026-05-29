@@ -56,7 +56,13 @@ contract Brook is BaseHook, IBrook {
 
     // ---------------------------------------------------------------------
     // Pool configuration
-    // ---------------------------------------------------------------------
+    /// @notice Set pool parameters before calling poolManager.initialize.
+   /// @dev Must be called before initialize. Can only be set once per pool.
+   /// Open access by design — any address can configure a pool before
+   /// initialization, but parameters are locked permanently once
+  ///  beforeInitialize fires. A misconfigured pool cannot be corrected
+  ///  after initialization, so callers should verify parameters carefully.
+  ///  The configuring address does not gain any special privileges.
 
     function configurePool(
         bytes32 poolId,
@@ -298,7 +304,13 @@ contract Brook is BaseHook, IBrook {
 
     // ---------------------------------------------------------------------
     // Claim
-    // ---------------------------------------------------------------------
+    /// @notice Claims vested yield from the previous epoch's buffer.
+    /// @dev Callable by anyone who knows the positionKey. The positionKey is
+   /// derived from keccak256(abi.encode(sender, tickLower, tickUpper, salt))
+   /// where sender is the address that called modifyLiquidity — typically
+  ///  a router or position manager, not the LP's EOA directly.
+  ///  Yield is sent to recipient regardless of who calls claim.
+  ///  nonReentrant guard prevents reentrancy via malicious ERC20 callbacks.
 
     function claim(
         bytes32 poolId,
@@ -306,6 +318,7 @@ contract Brook is BaseHook, IBrook {
         address recipient
     ) external nonReentrant {
         if (!_initialized[poolId]) revert PoolNotConfigured(poolId);
+        if (recipient == address(0)) revert InvalidRecipient();
 
         Types.EpochState storage epoch = _epoch[poolId];
         if (epoch.prevBuffer == 0) revert EpochNotYetComplete(poolId);
@@ -420,7 +433,18 @@ contract Brook is BaseHook, IBrook {
 
     // ---------------------------------------------------------------------
     // View functions
-    // ---------------------------------------------------------------------
+    
+    /// @notice Helper for LPs to compute their position key off-chain or on-chain.
+   /// @dev Position key = keccak256(abi.encode(sender, tickLower, tickUpper, salt))
+   ///      where sender is whoever called modifyLiquidity (router, position manager).
+   function computePositionKey(
+    address sender,
+    int24 tickLower,
+    int24 tickUpper,
+    bytes32 salt
+   ) external pure returns (bytes32) {
+    return keccak256(abi.encode(sender, tickLower, tickUpper, salt));
+   }
 
     function getPoolConfig(bytes32 poolId)
         external view override returns (Types.PoolConfig memory)
