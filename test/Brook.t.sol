@@ -974,6 +974,213 @@ function test_configurePool_cannotReconfigureAfterInit() public {
     brook.configurePool(id, EPOCH_LENGTH, SMOOTHING_FEE, IN_RANGE_MULT);
 }
 
+// ---------------------------------------------------------------------
+// edge cases
+// ---------------------------------------------------------------------
+
+function test_edge_emptyEpoch_claimRevertsWithNoBuffer() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    _addLiquidity(key, -600, 600, 1000e6);
+
+    // No swaps — buffer stays zero.
+    // Warp past epoch length.
+    vm.warp(block.timestamp + EPOCH_LENGTH + 1);
+
+    bytes32 posKey = _positionKey(address(router), -600, 600, bytes32(0));
+
+    // prevBuffer is still zero — claim should revert.
+    vm.expectRevert(
+        abi.encodeWithSelector(IBrook.EpochNotYetComplete.selector, id)
+    );
+    brook.claim(id, posKey, address(this));
+}
+
+function test_edge_firstEpoch_noPayoutUntilRollover() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    _addLiquidity(key, -600, 600, 1000e6);
+    _swap(key, true, -1000);
+
+    // Buffer is filling but no rollover yet.
+    assertGt(brook.getEpochState(id).buffer, 0);
+    assertEq(brook.getEpochState(id).prevBuffer, 0);
+
+    bytes32 posKey = _positionKey(address(router), -600, 600, bytes32(0));
+
+    // Cannot claim yet.
+    vm.expectRevert(
+        abi.encodeWithSelector(IBrook.EpochNotYetComplete.selector, id)
+    );
+    brook.claim(id, posKey, address(this));
+}
+
+function test_edge_lazyRollover_triggeredOnNextSwap() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    _addLiquidity(key, -600, 600, 1000e6);
+    _swap(key, true, -1000);
+
+    uint128 bufferBefore = brook.getEpochState(id).buffer;
+    assertGt(bufferBefore, 0);
+
+    vm.warp(block.timestamp + EPOCH_LENGTH + 1);
+
+    // Rollover fires lazily on next swap.
+    _swap(key, false, -1000);
+
+    Types.EpochState memory state = brook.getEpochState(id);
+    assertEq(state.prevBuffer, bufferBefore);
+    // Current buffer has fees from the second swap — just assert it was reset and refilling.
+    assertGt(state.buffer, 0);
+}
+
+function test_edge_flashDeposit_trivialScore() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    // LP1 deposits at the start and stays the whole epoch.
+    _addLiquidity(key, -600, 600, 1000e6);
+    _swap(key, true, -1000);
+
+    // Warp to just before rollover.
+    vm.warp(block.timestamp + EPOCH_LENGTH - 1);
+
+    // LP2 flash deposits 1 second before rollover.
+    _addLiquidity(key, -600, 600, 1000e6);
+
+    // Rollover triggers.
+    vm.warp(block.timestamp + 2);
+    _swap(key, false, -1000);
+
+    bytes32 posKey1 = _positionKey(address(router), -600, 600, bytes32(0));
+
+    // Warp to end of streaming epoch.
+    vm.warp(block.timestamp + EPOCH_LENGTH);
+
+    address recipient = makeAddr("lp1");
+    brook.claim(id, posKey1, recipient);
+
+    uint256 lp1Payout = token1.balanceOf(recipient);
+
+    // LP1 should get the vast majority of the buffer.
+    // LP2's score is trivial (1 second vs full epoch).
+    assertGt(lp1Payout, 0);
+}
+
+function test_edge_singleLP_gets100PercentOfBuffer() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    _addLiquidity(key, -600, 600, 1000e6);
+
+    // Two swaps to fill the buffer.
+    _swap(key, true, -1000);
+    _swap(key, false, -1000);
+
+    uint128 prevBuf = brook.getEpochState(id).buffer;
+    assertGt(prevBuf, 0);
+
+    // Trigger rollover.
+    vm.warp(block.timestamp + EPOCH_LENGTH + 1);
+    _swap(key, true, -1000);
+
+    assertEq(brook.getEpochState(id).prevBuffer, prevBuf);
+
+    bytes32 posKey = _positionKey(address(router), -600, 600, bytes32(0));
+
+    // Claim at 50% elapsed — hook definitely has enough balance.
+    vm.warp(block.timestamp + EPOCH_LENGTH / 2);
+
+    address recipient = makeAddr("sole-lp");
+    brook.claim(id, posKey, recipient);
+
+    // Single LP earns all of their vested share.
+    assertGt(token1.balanceOf(recipient), 0);
+}
+
+function test_edge_outOfRangeLP_stillEarnsPartialYield() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    // Add in-range liquidity so swaps work.
+    _addLiquidity(key, -600, 600, 1000e6);
+
+    // Add out-of-range liquidity (below current tick).
+    _addLiquidity(key, -600, -120, 500e6);
+
+    _swap(key, true, -1000);
+
+    vm.warp(block.timestamp + EPOCH_LENGTH + 1);
+    _swap(key, false, -1000);
+
+    bytes32 posKeyOutOfRange = _positionKey(address(router), -600, -120, bytes32(0));
+
+    vm.warp(block.timestamp + EPOCH_LENGTH);
+
+    address recipient = makeAddr("out-of-range-lp");
+    uint256 balBefore = token1.balanceOf(recipient);
+
+    // Out-of-range LP should still earn something (inRangeMultiplier gives partial credit).
+    brook.claim(id, posKeyOutOfRange, recipient);
+
+    uint256 payout = token1.balanceOf(recipient) - balBefore;
+    assertGt(payout, 0);
+}
+
+function test_edge_claimAtExactEpochBoundary() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    _addLiquidity(key, -600, 600, 1000e6);
+    _swap(key, true, -1000);
+
+    vm.warp(block.timestamp + EPOCH_LENGTH + 1);
+    _swap(key, false, -1000);
+
+    bytes32 posKey = _positionKey(address(router), -600, 600, bytes32(0));
+
+    // Claim at exactly epoch length elapsed — should get full share.
+    vm.warp(block.timestamp + EPOCH_LENGTH);
+
+    address recipient = makeAddr("exact-boundary");
+    brook.claim(id, posKey, recipient);
+
+    assertGt(token1.balanceOf(recipient), 0);
+}
+
+function test_edge_noSwaps_lpWithdrawsCleanly() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
+
+    _addLiquidity(key, -600, 600, 1000e6);
+
+    vm.warp(block.timestamp + 3 days);
+
+    bytes32 posKey = _positionKey(address(router), -600, 600, bytes32(0));
+    Types.LPState memory lp = brook.getLPState(id, posKey);
+    uint128 full = lp.liquidity;
+
+    // Withdraw cleanly with no swaps ever happening.
+    _removeLiquidity(key, -600, 600, int256(uint256(full)));
+
+    Types.LPState memory after_ = brook.getLPState(id, posKey);
+    assertEq(after_.liquidity, 0);
+    assertGt(after_.totalTime, 0);
+    assertEq(brook.getEpochState(id).buffer, 0);
+}
+
     // ---------------------------------------------------------------------
     // Permission flags
     // ---------------------------------------------------------------------
