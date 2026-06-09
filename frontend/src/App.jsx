@@ -218,7 +218,7 @@ export default function App() {
       <nav className="nav">
         <div className="nav-logo"><LogoMark size={32}/> Brook</div>
         <div className="nav-meta">
-          <span className="live-dot">live</span>
+          <a className="nav-link" href="/docs.html">Docs</a>
           {wallet
             ? <span className="wallet-pill">{short(wallet)}</span>
             : <button className="btn-ghost sm" onClick={connect}>Connect Wallet</button>}
@@ -320,7 +320,7 @@ export default function App() {
       <footer className="footer">
         <div className="foot-l"><LogoMark size={20}/> Brook · Pre-audit, pre-mainnet</div>
         <div className="foot-r">
-          <a href="/docs.html">How to use</a>
+          <a href="/docs.html">Docs</a>
           <a href="https://github.com/Fatumayattani/brook" target="_blank" rel="noreferrer">GitHub</a>
           <a href="https://atrium.academy/uniswap" target="_blank" rel="noreferrer">UHI9</a>
         </div>
