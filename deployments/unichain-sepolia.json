@@ -7,5 +7,18 @@
   "block": 53471585,
   "txHash": "0x82394c6154f5dbd3423d42c753d0c31d99a5f149db3f0b59c7af9cd1f8a05452",
   "verified": true,
-  "verificationUrl": "https://sourcify.dev/server/v2/verify/0d857657-6071-4a35-96e9-eef501cfbf5a"
+  "verificationUrl": "https://sourcify.dev/server/v2/verify/0d857657-6071-4a35-96e9-eef501cfbf5a",
+  "seededPool": {
+    "poolId": "0x0965c7c46f8c0623744ed8273683ce536ef70657a1fcb853ac6c9a6216e0570b",
+    "token0": "0x53C1CDcec62406aD504016344678A3f904696d75",
+    "token1": "0xc23376C87B59b4B1FA07CA3A4AD82305845C7126",
+    "fee": 3000,
+    "tickSpacing": 60,
+    "epochLength": 604800,
+    "smoothingFee": 2000,
+    "inRangeMultiplier": 4,
+    "epochBuffer": 8325,
+    "swapCount": 5,
+    "seededAt": "2026-06-08"
+  }
 }
