@@ -2,12 +2,19 @@
   "network": "Unichain Sepolia",
   "chainId": 1301,
   "brook": "0xef91EAf413170cAD2f65B3f05E969759df0AA744",
+  "brookRouter": "0x57b79d383E951227C9d0479eFd031a7Ca73fB81e",
   "poolManager": "0x00B036B58a818B1BC34d502D3fE730Db729e62AC",
   "deployedAt": "2026-05-29",
   "block": 53471585,
   "txHash": "0x82394c6154f5dbd3423d42c753d0c31d99a5f149db3f0b59c7af9cd1f8a05452",
   "verified": true,
   "verificationUrl": "https://sourcify.dev/server/v2/verify/0d857657-6071-4a35-96e9-eef501cfbf5a",
+  "router": {
+    "address": "0x57b79d383E951227C9d0479eFd031a7Ca73fB81e",
+    "txHash": "0x2b5ac6617f333283a05964a736857be4b3c2f29f2bd626fae184327275fbf56a",
+    "block": 54150216,
+    "deployedAt": "2026-06-08"
+  },
   "seededPool": {
     "poolId": "0x0965c7c46f8c0623744ed8273683ce536ef70657a1fcb853ac6c9a6216e0570b",
     "token0": "0x53C1CDcec62406aD504016344678A3f904696d75",
