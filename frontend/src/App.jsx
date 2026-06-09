@@ -1,599 +1,345 @@
 import { useState, useEffect, useCallback } from 'react'
+import { ethers } from 'ethers'
 
-// ─── Contract config ──────────────────────────────────────────────────────────
+// ─── Live deployment · Unichain Sepolia ────────────────────────────────────────
 const CONFIG = {
-  rpc:          'https://sepolia.unichain.org',
-  chainId:      1301,
-  brook:        '0xef91EAf413170cAD2f65B3f05E969759df0AA744',
-  poolManager:  '0x00B036B58a818B1BC34d502D3fE730Db729e62AC',
-  token0:       '0x53C1CDcec62406aD504016344678A3f904696d75',
-  token1:       '0xc23376C87B59b4B1FA07CA3A4AD82305845C7126',
-  poolId:       '0x0965c7c46f8c0623744ed8273683ce536ef70657a1fcb853ac6c9a6216e0570b',
-  epochLength:  7 * 24 * 60 * 60, // 7 days in seconds
-  explorer:     'https://unichain-sepolia.blockscout.com',
+  rpc:         'https://sepolia.unichain.org',
+  chainId:     1301,
+  chainHex:    '0x515',
+  brook:       '0xef91EAf413170cAD2f65B3f05E969759df0AA744',
+  router:      '0x57b79d383E951227C9d0479eFd031a7Ca73fB81e',
+  token0:      '0x88A0a6C32d773f85d23D66fC5178Fca75Bd82Caf',
+  token1:      '0xFb506F1884Dc277f5B21a18Cb90247504D1b61c7',
+  poolId:      '0x903bbfd43ff5574d10aca3631527813450b7429f73333766517d1664b9ba3b9d',
+  fee:         3000,
+  tickSpacing: 60,
+  explorer:    'https://unichain-sepolia.blockscout.com',
 }
 
-// ─── ABI fragments ────────────────────────────────────────────────────────────
+const POOL_KEY_TUPLE = [CONFIG.token0, CONFIG.token1, CONFIG.fee, CONFIG.tickSpacing, CONFIG.brook]
+
+const LIQUIDITY    = 1_000_000n
+const MINT_AMOUNT  = ethers.parseEther('100000')
+const SWAP_AMOUNT  = -50_000
+
+// ─── ABIs ───────────────────────────────────────────────────────────────────
 const BROOK_ABI = [
-  'function getEpochState(bytes32 poolId) view returns (uint128 buffer, uint128 prevBuffer, uint64 totalScore, uint64 lastUpdateTime, int24 currentTick, int128 lastSkimAmount)',
-  'function getPoolConfig(bytes32 poolId) view returns (uint64 epochLength, uint64 startTime, uint16 smoothingFee, uint16 inRangeMultiplier)',
-  'function isInitialized(bytes32 poolId) view returns (bool)',
-  'function claim(bytes32 poolId, bytes32 positionKey, address recipient)',
-  'function computePositionKey(address sender, int24 tickLower, int24 tickUpper, bytes32 salt) view returns (bytes32)',
-  'function getLastClaimTime(bytes32 poolId, bytes32 positionKey) view returns (uint64)',
+  'function getEpochState(bytes32) view returns (uint128 buffer, uint128 prevBuffer, uint64 totalScore, uint64 lastUpdateTime, int24 currentTick, int128 lastSkimAmount)',
+  'function getPoolConfig(bytes32) view returns (uint64 epochLength, uint64 startTime, uint16 smoothingFee, uint16 inRangeMultiplier)',
+  'function getLPState(bytes32, bytes32) view returns (uint128 liquidity, uint64 depositTime, uint64 lastTouched, uint64 totalTime, uint64 inRangeTime, int24 tickLower, int24 tickUpper)',
+  'function getFeeCurrency(bytes32) view returns (address)',
+]
+const ROUTER_ABI = [
+  'function addLiquidity((address,address,uint24,int24,address) key, uint256 liquidity)',
+  'function swap((address,address,uint24,int24,address) key, bool zeroForOne, int256 amountSpecified)',
+  'function claim((address,address,uint24,int24,address) key)',
+  'function positionKeyFor(address user) view returns (bytes32)',
+]
+const ERC20_ABI = [
+  'function mint(address to, uint256 amount)',
+  'function approve(address spender, uint256 amount) returns (bool)',
+  'function allowance(address owner, address spender) view returns (uint256)',
+  'function balanceOf(address) view returns (uint256)',
 ]
 
-// ─── RPC helpers ──────────────────────────────────────────────────────────────
-async function rpcCall(method, params) {
-  const res = await fetch(CONFIG.rpc, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  })
-  const data = await res.json()
-  if (data.error) throw new Error(data.error.message)
-  return data.result
-}
+const readProvider = new ethers.JsonRpcProvider(CONFIG.rpc)
+const brookRead  = new ethers.Contract(CONFIG.brook, BROOK_ABI, readProvider)
+const routerRead = new ethers.Contract(CONFIG.router, ROUTER_ABI, readProvider)
 
-function encodeCall(sig, ...args) {
-  // Minimal ABI encoder for view calls we need
-  const sighash = keccak256Sig(sig)
-  let encoded = sighash
-  for (const arg of args) {
-    if (typeof arg === 'string' && arg.startsWith('0x')) {
-      encoded += arg.slice(2).padStart(64, '0')
-    } else if (typeof arg === 'number' || typeof arg === 'bigint') {
-      encoded += BigInt(arg).toString(16).padStart(64, '0')
-    }
-  }
-  return encoded
-}
-
-// Simple keccak-like via browser — we use known sighashes instead
-const SIGHASHES = {
-  'getEpochState(bytes32)':  '0xb0a9498c',
-  'getPoolConfig(bytes32)':  '0x037aadbe',
-  'isInitialized(bytes32)':  '0xf7b637bb',
-}
-
-async function callContract(funcSig, poolId) {
-  const sighash = SIGHASHES[funcSig]
-  if (!sighash) throw new Error('Unknown function: ' + funcSig)
-  const data = sighash + poolId.slice(2).padStart(64, '0')
-  return rpcCall('eth_call', [{ to: CONFIG.brook, data }, 'latest'])
-}
-
-function parseEpochState(hex) {
-  const h = hex.slice(2)
-  const buffer     = BigInt('0x' + h.slice(0, 64))
-  const prevBuffer = BigInt('0x' + h.slice(64, 128))
-  const totalScore = BigInt('0x' + h.slice(128, 192))
-  const lastUpdate = Number(BigInt('0x' + h.slice(192, 256)))
-  const tick       = Number(BigInt('0x' + h.slice(256, 320)) & BigInt('0xFFFFFF'))
-  return { buffer, prevBuffer, totalScore, lastUpdateTime: lastUpdate, currentTick: tick }
-}
-
-function parsePoolConfig(hex) {
-  const h = hex.slice(2)
-  const epochLength      = Number(BigInt('0x' + h.slice(0, 64)))
-  const startTime        = Number(BigInt('0x' + h.slice(64, 128)))
-  const smoothingFee     = Number(BigInt('0x' + h.slice(128, 192)))
-  const inRangeMultiplier = Number(BigInt('0x' + h.slice(192, 256)))
-  return { epochLength, startTime, smoothingFee, inRangeMultiplier }
-}
-
-function fmt(n, decimals = 0) {
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const fmt = (n) => {
   if (n === undefined || n === null) return '—'
-  const num = typeof n === 'bigint' ? Number(n) : n
-  if (decimals === 0) return num.toLocaleString()
-  return num.toFixed(decimals)
+  const v = typeof n === 'bigint' ? Number(n) : n
+  return v.toLocaleString()
 }
-
-function shortAddr(addr) {
-  if (!addr) return ''
-  return addr.slice(0, 6) + '...' + addr.slice(-4)
-}
-
-function epochProgress(lastUpdateTime, epochLength) {
-  if (!lastUpdateTime || !epochLength) return 0
-  const now = Math.floor(Date.now() / 1000)
-  const elapsed = now - lastUpdateTime
-  return Math.min(1, Math.max(0, elapsed / epochLength))
-}
-
-function secondsToHuman(s) {
-  if (s <= 0) return '0s'
-  const d = Math.floor(s / 86400)
-  const h = Math.floor((s % 86400) / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  if (d > 0) return `${d}d ${h}h`
+const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : ''
+function human(s) {
+  if (s <= 0) return 'ready to roll'
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60
   if (h > 0) return `${h}h ${m}m`
-  return `${m}m`
+  if (m > 0) return `${m}m ${sec}s`
+  return `${sec}s`
 }
 
-// ─── Components ───────────────────────────────────────────────────────────────
-
-function LogoMark({ size = 34 }) {
+// ─── Logo ───────────────────────────────────────────────────────────────────
+function LogoMark({ size = 32 }) {
   return (
-    <div className="logo-svg" style={{ width: size, height: size, borderRadius: size * 0.29 }}>
+    <div className="logo-svg" style={{ width: size, height: size, borderRadius: size * 0.28 }}>
       <svg width={size * 0.55} height={size * 0.55} viewBox="0 0 20 20" fill="none">
-        <path d="M1 11 Q 5 7, 9.5 11 T 17 11 T 20 11"
-          stroke="white" strokeWidth="2" strokeLinecap="round" fill="none"/>
-        <path d="M1 15 Q 5 11, 9.5 15 T 17 15 T 20 15"
-          stroke="white" strokeWidth="2" strokeLinecap="round" fill="none" opacity="0.55"/>
+        <path d="M1 11 Q 5 7, 9.5 11 T 17 11 T 20 11" stroke="white" strokeWidth="2" strokeLinecap="round" fill="none"/>
+        <path d="M1 15 Q 5 11, 9.5 15 T 17 15 T 20 15" stroke="white" strokeWidth="2" strokeLinecap="round" fill="none" opacity="0.55"/>
       </svg>
     </div>
   )
 }
 
-function EpochRing({ progress, daysLeft }) {
-  const r = 48
-  const circ = 2 * Math.PI * r
-  const dash = circ * progress
-  const gap  = circ - dash
-
+function EpochRing({ progress }) {
+  const r = 46, circ = 2 * Math.PI * r
+  const dash = circ * Math.min(1, progress)
   return (
-    <div className="epoch-ring-wrap">
-      <div className="epoch-ring">
-        <svg width="120" height="120" viewBox="0 0 120 120">
-          <circle cx="60" cy="60" r={r}
-            fill="none" stroke="rgba(29,158,117,0.08)" strokeWidth="8"/>
-          <circle cx="60" cy="60" r={r}
-            fill="none"
-            stroke="url(#ring-grad)"
-            strokeWidth="8"
-            strokeLinecap="round"
-            strokeDasharray={`${dash} ${gap}`}
-            style={{ transition: 'stroke-dasharray 1s ease' }}
-          />
-          <defs>
-            <linearGradient id="ring-grad" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stopColor="#0f6e56"/>
-              <stop offset="100%" stopColor="#25c994"/>
-            </linearGradient>
-          </defs>
-        </svg>
-        <div className="epoch-ring-center">
-          <span className="epoch-ring-pct">{Math.round(progress * 100)}%</span>
-          <span className="epoch-ring-label">elapsed</span>
-        </div>
-      </div>
-      <div className="epoch-days">
-        {daysLeft > 0 ? `${secondsToHuman(daysLeft)} remaining` : 'epoch ending soon'}
-      </div>
-    </div>
-  )
-}
-
-function BufferChart({ history }) {
-  if (!history || history.length < 2) {
-    return (
-      <div className="chart-wrap" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <span style={{ fontSize: 11, color: 'var(--ink-muted)' }}>accumulating data...</span>
-      </div>
-    )
-  }
-
-  const max = Math.max(...history.map(d => Number(d.buffer)), 1)
-  const w = 600
-  const h = 160
-  const pad = { top: 16, right: 16, bottom: 28, left: 48 }
-  const iw = w - pad.left - pad.right
-  const ih = h - pad.top - pad.bottom
-
-  const pts = history.map((d, i) => {
-    const x = pad.left + (i / (history.length - 1)) * iw
-    const y = pad.top + ih - (Number(d.buffer) / max) * ih
-    return `${x},${y}`
-  })
-
-  const area = `M${pts[0]} L${pts.join(' L')} L${pad.left + iw},${pad.top + ih} L${pad.left},${pad.top + ih} Z`
-  const line = `M${pts[0]} L${pts.join(' L')}`
-
-  return (
-    <div className="chart-wrap">
-      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="area-grad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#1d9e75" stopOpacity="0.25"/>
-            <stop offset="100%" stopColor="#1d9e75" stopOpacity="0.02"/>
-          </linearGradient>
-        </defs>
-        {/* grid lines */}
-        {[0.25, 0.5, 0.75, 1].map(f => (
-          <line key={f}
-            x1={pad.left} y1={pad.top + ih - f * ih}
-            x2={pad.left + iw} y2={pad.top + ih - f * ih}
-            stroke="rgba(29,158,117,0.08)" strokeWidth="1"
-          />
-        ))}
-        {/* area */}
-        <path d={area} fill="url(#area-grad)"/>
-        {/* line */}
-        <path d={line} fill="none" stroke="#1d9e75" strokeWidth="1.5"
-          strokeLinejoin="round" strokeLinecap="round"/>
-        {/* dots */}
-        {pts.map((pt, i) => {
-          const [x, y] = pt.split(',')
-          return <circle key={i} cx={x} cy={y} r="3" fill="#25c994"/>
-        })}
-        {/* y axis labels */}
-        {[0, 0.5, 1].map(f => (
-          <text key={f} className="chart-axis"
-            x={pad.left - 6} y={pad.top + ih - f * ih + 4}
-            textAnchor="end">
-            {fmt(Math.round(f * max))}
-          </text>
-        ))}
-        {/* x label */}
-        <text className="chart-axis"
-          x={pad.left + iw / 2} y={h - 4}
-          textAnchor="middle">epoch buffer over time</text>
+    <div className="ring-wrap">
+      <svg width="116" height="116" viewBox="0 0 116 116">
+        <circle cx="58" cy="58" r={r} fill="none" stroke="rgba(29,158,117,0.1)" strokeWidth="7"/>
+        <circle cx="58" cy="58" r={r} fill="none" stroke="url(#rg)" strokeWidth="7" strokeLinecap="round"
+          strokeDasharray={`${dash} ${circ - dash}`} transform="rotate(-90 58 58)"
+          style={{ transition: 'stroke-dasharray 1s ease' }}/>
+        <defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="#0f6e56"/><stop offset="100%" stopColor="#25c994"/>
+        </linearGradient></defs>
       </svg>
-    </div>
-  )
-}
-
-function WalletBar({ address, onConnect, onDisconnect }) {
-  if (!address) {
-    return (
-      <div className="wallet-bar">
-        <span style={{ color: 'var(--ink-muted)', fontSize: 12 }}>
-          Connect wallet to view your position and claim yield
-        </span>
-        <button className="btn btn-ghost" onClick={onConnect} style={{ padding: '8px 16px', fontSize: 12 }}>
-          Connect Wallet
-        </button>
-      </div>
-    )
-  }
-  return (
-    <div className="wallet-bar">
-      <span className="wallet-addr">{address}</span>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        <span className="wallet-badge">Unichain Sepolia</span>
-        <button className="btn btn-ghost" onClick={onDisconnect}
-          style={{ padding: '6px 12px', fontSize: 11 }}>
-          Disconnect
-        </button>
+      <div className="ring-center">
+        <span className="ring-pct">{Math.round(Math.min(1, progress) * 100)}%</span>
+        <span className="ring-lbl">epoch</span>
       </div>
     </div>
   )
 }
-
-// ─── Main App ─────────────────────────────────────────────────────────────────
-
-const MOCK_POSITIONS = [
-  { lp: 'Amara', addr: '0x1234...5678', liquidity: '1,000', inRange: true,  score: '892,400', vested: '142' },
-  { lp: 'Kofi',  addr: '0xabcd...ef01', liquidity: '500',   inRange: false, score: '312,100', vested: '49' },
-  { lp: 'Zara',  addr: '0x9876...4321', liquidity: '750',   inRange: true,  score: '671,200', vested: '107' },
-]
 
 export default function App() {
+  const [wallet, setWallet]   = useState(null)
+  const [signer, setSigner]   = useState(null)
   const [epoch, setEpoch]     = useState(null)
   const [config, setConfig]   = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [position, setPosition] = useState(null)
+  const [balances, setBalances] = useState(null)
+  const [busy, setBusy]       = useState(null)
+  const [toast, setToast]     = useState(null)
   const [error, setError]     = useState(null)
-  const [history, setHistory] = useState([])
-  const [wallet, setWallet]   = useState(null)
-  const [claiming, setClaiming] = useState(false)
-  const [claimed, setClaimed]   = useState(false)
-  const [lastRefresh, setLastRefresh] = useState(null)
-
-  const fetchState = useCallback(async () => {
-    try {
-      const [epochHex, configHex] = await Promise.all([
-        callContract('getEpochState(bytes32)', CONFIG.poolId),
-        callContract('getPoolConfig(bytes32)', CONFIG.poolId),
-      ])
-      const e = parseEpochState(epochHex)
-      const c = parsePoolConfig(configHex)
-      setEpoch(e)
-      setConfig(c)
-      setHistory(prev => {
-        const next = [...prev, { buffer: e.buffer, t: Date.now() }]
-        return next.slice(-20) // keep last 20 readings
-      })
-      setLastRefresh(new Date())
-      setError(null)
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const [now, setNow]         = useState(Math.floor(Date.now() / 1000))
 
   useEffect(() => {
-    fetchState()
-    const interval = setInterval(fetchState, 15000) // refresh every 15s
-    return () => clearInterval(interval)
-  }, [fetchState])
+    const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000)
+    return () => clearInterval(t)
+  }, [])
 
-  async function connectWallet() {
-    if (!window.ethereum) {
-      alert('MetaMask not detected. Please install MetaMask.')
-      return
-    }
+  const refresh = useCallback(async () => {
     try {
-      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
-      setWallet(accounts[0])
-      // Switch to Unichain Sepolia
-      try {
-        await window.ethereum.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: '0x' + CONFIG.chainId.toString(16) }],
-        })
-      } catch {
-        await window.ethereum.request({
-          method: 'wallet_addEthereumChain',
-          params: [{
-            chainId: '0x' + CONFIG.chainId.toString(16),
-            chainName: 'Unichain Sepolia',
-            rpcUrls: [CONFIG.rpc],
-            nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-            blockExplorerUrls: [CONFIG.explorer],
-          }],
-        })
+      const [e, c] = await Promise.all([
+        brookRead.getEpochState(CONFIG.poolId),
+        brookRead.getPoolConfig(CONFIG.poolId),
+      ])
+      setEpoch({
+        buffer: e.buffer, prevBuffer: e.prevBuffer,
+        totalScore: e.totalScore, lastUpdateTime: Number(e.lastUpdateTime),
+      })
+      setConfig({
+        epochLength: Number(c.epochLength), startTime: Number(c.startTime),
+        smoothingFee: Number(c.smoothingFee), inRangeMultiplier: Number(c.inRangeMultiplier),
+      })
+      setError(null)
+      if (wallet) {
+        const pk = await routerRead.positionKeyFor(wallet)
+        const lp = await brookRead.getLPState(CONFIG.poolId, pk)
+        setPosition({ liquidity: lp.liquidity, totalTime: Number(lp.totalTime), inRangeTime: Number(lp.inRangeTime) })
+        const t0 = new ethers.Contract(CONFIG.token0, ERC20_ABI, readProvider)
+        const t1 = new ethers.Contract(CONFIG.token1, ERC20_ABI, readProvider)
+        const [b0, b1] = await Promise.all([t0.balanceOf(wallet), t1.balanceOf(wallet)])
+        setBalances({ token0: b0, token1: b1 })
       }
     } catch (err) {
-      console.error(err)
+      setError(err.message || String(err))
     }
-  }
+  }, [wallet])
 
-  function disconnectWallet() { setWallet(null) }
+  useEffect(() => {
+    refresh()
+    const i = setInterval(refresh, 12000)
+    return () => clearInterval(i)
+  }, [refresh])
 
-  async function handleClaim() {
-    if (!wallet || !window.ethereum) return
-    setClaiming(true)
+  async function connect() {
+    if (!window.ethereum) { setError('No wallet detected. Install a browser wallet to continue.'); return }
     try {
-      // For demo: show success after simulated tx
-      await new Promise(r => setTimeout(r, 2000))
-      setClaimed(true)
-      setTimeout(() => setClaimed(false), 4000)
-    } catch (err) {
-      console.error(err)
-    } finally {
-      setClaiming(false)
-    }
+      const provider = new ethers.BrowserProvider(window.ethereum)
+      await provider.send('eth_requestAccounts', [])
+      try {
+        await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: CONFIG.chainHex }] })
+      } catch {
+        await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [{
+          chainId: CONFIG.chainHex, chainName: 'Unichain Sepolia', rpcUrls: [CONFIG.rpc],
+          nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 }, blockExplorerUrls: [CONFIG.explorer],
+        }]})
+      }
+      const s = await provider.getSigner()
+      setSigner(s)
+      setWallet(await s.getAddress())
+    } catch (err) { setError(err.message || String(err)) }
   }
 
-  const progress  = epoch && config
-    ? epochProgress(epoch.lastUpdateTime, config.epochLength || CONFIG.epochLength)
-    : 0
+  function showToast(msg, hash) { setToast({ msg, hash }); setTimeout(() => setToast(null), 6000) }
 
-  const daysLeft  = epoch && config
-    ? Math.max(0, (config.epochLength || CONFIG.epochLength) - (Math.floor(Date.now() / 1000) - epoch.lastUpdateTime))
-    : 0
+  async function run(action, label, fn) {
+    setBusy(action); setError(null)
+    try {
+      const tx = await fn()
+      showToast(`${label} sent`, tx.hash)
+      await tx.wait()
+      showToast(`${label} confirmed`, tx.hash)
+      await refresh()
+    } catch (err) {
+      setError(err.shortMessage || err.message || String(err))
+    } finally { setBusy(null) }
+  }
 
-  const bufferPct = epoch && epoch.prevBuffer > 0n
-    ? Math.min(100, Number(epoch.buffer * 100n / epoch.prevBuffer))
-    : epoch ? Math.min(100, Number(epoch.buffer) / 100) : 0
+  const tokens = () => ({
+    t0: new ethers.Contract(CONFIG.token0, ERC20_ABI, signer),
+    t1: new ethers.Contract(CONFIG.token1, ERC20_ABI, signer),
+  })
+  const router = () => new ethers.Contract(CONFIG.router, ROUTER_ABI, signer)
+
+  const doMint = () => run('mint', 'Mint', async () => {
+    const { t0 } = tokens()
+    const tx0 = await t0.mint(wallet, MINT_AMOUNT)
+    await tx0.wait()
+    const { t1 } = tokens()
+    return t1.mint(wallet, MINT_AMOUNT)
+  })
+  const doApprove = () => run('approve', 'Approve', async () => {
+    const { t0 } = tokens()
+    const tx0 = await t0.approve(CONFIG.router, ethers.MaxUint256)
+    await tx0.wait()
+    const { t1 } = tokens()
+    return t1.approve(CONFIG.router, ethers.MaxUint256)
+  })
+  const doAddLiquidity = () => run('lp', 'Add liquidity', () => router().addLiquidity(POOL_KEY_TUPLE, LIQUIDITY))
+  const doSwap  = () => run('swap', 'Swap', () => router().swap(POOL_KEY_TUPLE, false, SWAP_AMOUNT))
+  const doClaim = () => run('claim', 'Claim', () => router().claim(POOL_KEY_TUPLE))
+
+  const epochLen = config?.epochLength || 3600
+  const elapsed = epoch ? now - epoch.lastUpdateTime : 0
+  const progress = epoch ? elapsed / epochLen : 0
+  const timeLeft = epoch ? epochLen - elapsed : 0
+  const canRoll = epoch && epoch.lastUpdateTime > 0 && elapsed >= epochLen
+  const hasPosition = position && position.liquidity > 0n
+  const claimable = epoch && epoch.prevBuffer > 0n && hasPosition
 
   return (
     <div className="app">
-      {/* NAV */}
       <nav className="nav">
-        <div className="nav-logo">
-          <LogoMark size={34}/>
-          Brook
-        </div>
+        <div className="nav-logo"><LogoMark size={32}/> Brook</div>
         <div className="nav-meta">
-        <span className="live-dot">live</span>
-        <a className="nav-link" href="https://github.com/Fatumayattani/brook"
-      target="_blank" rel="noopener noreferrer">GitHub</a>
-    </div>
+          <span className="live-dot">live</span>
+          {wallet
+            ? <span className="wallet-pill">{short(wallet)}</span>
+            : <button className="btn-ghost sm" onClick={connect}>Connect Wallet</button>}
+          <a className="nav-link" href="https://github.com/Fatumayattani/brook" target="_blank" rel="noreferrer">GitHub</a>
+        </div>
       </nav>
 
-  <div className="hero">
-  <h1 className="hero-title">
-    <em>Steady yield</em><br/>for committed LPs.
-  </h1>
-  <p className="hero-sub">
-    Fees in. Paycheck out.
-  </p>
-  </div>
+      <header className="hero">
+        <h1><em>Steady yield</em> for committed LPs.</h1>
+        <p>A live Uniswap v4 hook on Unichain Sepolia. Mint test tokens, provide liquidity, swap, and claim real epoch-vested yield — all from your wallet.</p>
+      </header>
 
-      {/* WALLET BAR */}
-      <WalletBar address={wallet} onConnect={connectWallet} onDisconnect={disconnectWallet}/>
-
-      {/* ERROR */}
-      {error && (
-        <div className="error-banner">
-          RPC error: {error} · <button onClick={fetchState}
-            style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', textDecoration: 'underline' }}>
-            retry
-          </button>
+      {error && <div className="banner err">{error}</div>}
+      {toast && (
+        <div className="banner ok">
+          {toast.msg}
+          {toast.hash && <> · <a href={`${CONFIG.explorer}/tx/${toast.hash}`} target="_blank" rel="noreferrer">view tx ↗</a></>}
         </div>
       )}
 
-      {/* STAT CARDS */}
-      <div className="grid">
+      <section className="grid3">
         <div className="card">
-          <div className="card-label">epoch buffer</div>
-          {loading
-            ? <div className="skeleton"/>
-            : <div className="card-value">{epoch ? fmt(Number(epoch.buffer)) : '—'}</div>
-          }
-          <div className="card-sub">fees accumulated this epoch</div>
-          {epoch && (
-            <div className="buffer-section">
-              <div className="buffer-label-row">
-                <span>filling</span>
-                <span>{bufferPct.toFixed(1)}%</span>
-              </div>
-              <div className="buffer-track">
-                <div className="buffer-fill" style={{ width: bufferPct + '%' }}/>
-              </div>
+          <div className="card-lbl">epoch buffer</div>
+          <div className="card-val">{epoch ? fmt(epoch.buffer) : '—'}</div>
+          <div className="card-sub">filling now from swaps</div>
+        </div>
+        <div className="card">
+          <div className="card-lbl">prev buffer · streaming</div>
+          <div className="card-val amber">{epoch ? fmt(epoch.prevBuffer) : '—'}</div>
+          <div className="card-sub">claimable by LPs</div>
+        </div>
+        <div className="card center">
+          <EpochRing progress={progress}/>
+          <div className="card-sub" style={{ marginTop: 10 }}>
+            {canRoll ? 'epoch ready to roll' : `${human(timeLeft)} left`}
+          </div>
+        </div>
+      </section>
+
+      <section className="card loop">
+        <div className="card-lbl">run the loop</div>
+        {!wallet && <p className="loop-hint">Connect your wallet to start. You'll need a little Unichain Sepolia ETH for gas.</p>}
+
+        <div className="steps">
+          <Step n="1" title="Mint test tokens" done={balances && balances.token0 > 0n}
+            desc="Get demo tokens (DTA + DTB) to your wallet."
+            btn="Mint tokens" onClick={doMint} busy={busy==='mint'} disabled={!wallet}/>
+
+          <Step n="2" title="Approve the router" done={false}
+            desc="Allow the router to move your tokens for LP and swaps."
+            btn="Approve" onClick={doApprove} busy={busy==='approve'} disabled={!wallet || !(balances && balances.token0 > 0n)}/>
+
+          <Step n="3" title="Add liquidity" done={hasPosition}
+            desc="Provide full-range liquidity. Your position keys to you."
+            btn="Add liquidity" onClick={doAddLiquidity} busy={busy==='lp'} disabled={!wallet}/>
+
+          <Step n="4" title="Swap" done={false}
+            desc="Swap through the pool. 20% of output skims into the buffer."
+            btn="Swap" onClick={doSwap} busy={busy==='swap'} disabled={!wallet}/>
+
+          <Step n="5" title="Roll the epoch" done={epoch && epoch.prevBuffer > 0n}
+            desc={canRoll ? 'Epoch expired — one swap rolls the buffer into the payout pool.' : 'Waits for the epoch to expire, then a swap rolls it.'}
+            btn="Swap to roll" onClick={doSwap} busy={busy==='swap'} disabled={!wallet || !canRoll}/>
+
+          <Step n="6" title="Claim yield" done={false} highlight={claimable}
+            desc="Claim your vested yield. It lands in your wallet."
+            btn="Claim yield" onClick={doClaim} busy={busy==='claim'} disabled={!claimable}/>
+        </div>
+      </section>
+
+      {wallet && (
+        <section className="grid2">
+          <div className="card">
+            <div className="card-lbl">your position</div>
+            <div className="kv"><span>liquidity</span><span className="green">{position ? fmt(position.liquidity) : '—'}</span></div>
+            <div className="kv"><span>total time</span><span>{position ? human(position.totalTime) : '—'}</span></div>
+            <div className="kv"><span>in-range time</span><span className="green">{position ? human(position.inRangeTime) : '—'}</span></div>
+          </div>
+          <div className="card">
+            <div className="card-lbl">your balances</div>
+            <div className="kv"><span>DTA</span><span className="mono">{balances ? fmt(ethers.formatEther(balances.token0)).split('.')[0] : '—'}</span></div>
+            <div className="kv"><span>DTB</span><span className="mono">{balances ? fmt(ethers.formatEther(balances.token1)).split('.')[0] : '—'}</span></div>
+          </div>
+        </section>
+      )}
+
+      <section className="card">
+        <div className="card-lbl">live on Unichain Sepolia</div>
+        <div className="contracts">
+          {[['Brook hook', CONFIG.brook], ['Router', CONFIG.router], ['Token DTA', CONFIG.token0], ['Token DTB', CONFIG.token1]].map(([label, a]) => (
+            <div key={a} className="contract-row">
+              <span>{label}</span>
+              <a href={`${CONFIG.explorer}/address/${a}`} target="_blank" rel="noreferrer" className="mono">{short(a)} ↗</a>
             </div>
-          )}
+          ))}
         </div>
+      </section>
 
-        <div className="card">
-          <div className="card-label">prev buffer (streaming)</div>
-          {loading
-            ? <div className="skeleton"/>
-            : <div className="card-value amber">{epoch ? fmt(Number(epoch.prevBuffer)) : '—'}</div>
-          }
-          <div className="card-sub">last epoch · paying out now</div>
-        </div>
-
-        <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
-          <div className="card-label">epoch progress</div>
-          {loading
-            ? <div className="skeleton" style={{ height: 120 }}/>
-            : <EpochRing progress={progress} daysLeft={daysLeft}/>
-          }
-        </div>
-      </div>
-
-      {/* BUFFER CHART + POOL INFO */}
-      <div className="grid-wide">
-        <div className="card">
-          <div className="card-label">buffer accumulation</div>
-          <BufferChart history={history}/>
-        </div>
-
-        <div className="card">
-          <div className="card-label">pool config</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 8 }}>
-            {[
-              { label: 'epoch length',     value: config ? secondsToHuman(config.epochLength || CONFIG.epochLength) : '—' },
-              { label: 'smoothing fee',    value: config ? (config.smoothingFee / 100).toFixed(1) + '%' : '—' },
-              { label: 'in-range mult',    value: config ? config.inRangeMultiplier + 'x' : '—' },
-              { label: 'current tick',     value: epoch  ? epoch.currentTick : '—' },
-              { label: 'pool id',          value: shortAddr(CONFIG.poolId), mono: true },
-            ].map(({ label, value, mono }) => (
-              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 11, color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
-                <span style={{ fontSize: 13, color: 'var(--teal-bright)', fontFamily: mono ? 'var(--mono)' : 'inherit' }}>{value}</span>
-              </div>
-            ))}
-          </div>
-          <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 10, color: 'var(--ink-muted)', marginBottom: 6 }}>last refresh</div>
-            <div style={{ fontSize: 11, color: 'var(--ink-soft)', fontFamily: 'var(--mono)' }}>
-              {lastRefresh ? lastRefresh.toLocaleTimeString() : '—'} · auto every 15s
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* CLAIM */}
-      <div className="grid-full">
-        <div className="card claim-card">
-          <div className="card-label">yield claim</div>
-          <div className="claim-row">
-            <div className="claim-info">
-              <div style={{ fontSize: 11, color: 'var(--ink-muted)', marginBottom: 4 }}>your vested yield</div>
-              <div className="claim-amount">
-                {wallet
-                  ? claimed ? '✓ claimed' : fmt(Number(epoch?.prevBuffer || 0n) > 0 ? 107 : 0)
-                  : '—'
-                }
-              </div>
-              <div className="claim-desc">
-                {wallet
-                  ? 'Based on your in-range time this epoch. Score is weighted — LPs who stayed in range earn more.'
-                  : 'Connect your wallet to see your vested yield and claim.'
-                }
-              </div>
-            </div>
-            <div className="claim-actions">
-              <button
-                className="btn btn-primary"
-                onClick={handleClaim}
-                disabled={!wallet || claiming || claimed || Number(epoch?.prevBuffer || 0n) === 0}
-              >
-                {claiming ? 'claiming...' : claimed ? 'claimed ✓' : 'claim yield'}
-              </button>
-              <a
-                href={`${CONFIG.explorer}/address/${CONFIG.brook}`}
-                target="_blank" rel="noopener noreferrer"
-                className="btn btn-ghost"
-              >
-                explorer ↗
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* LP POSITIONS TABLE */}
-      <div className="grid-full">
-        <div className="card">
-          <div className="card-label">lp positions · demo data</div>
-          <table className="pos-table" style={{ marginTop: 16 }}>
-            <thead>
-              <tr>
-                <th>LP</th>
-                <th>address</th>
-                <th>liquidity</th>
-                <th>in range</th>
-                <th>score</th>
-                <th>vested</th>
-              </tr>
-            </thead>
-            <tbody>
-              {MOCK_POSITIONS.map(p => (
-                <tr key={p.lp}>
-                  <td style={{ color: 'var(--ink)', fontWeight: 500 }}>{p.lp}</td>
-                  <td className="mono">{p.addr}</td>
-                  <td className="mono green">{p.liquidity}</td>
-                  <td>
-                    <span className={`in-range-pill ${p.inRange ? 'yes' : 'no'}`}>
-                      {p.inRange ? '● in range' : '○ out'}
-                    </span>
-                  </td>
-                  <td className="mono">{p.score}</td>
-                  <td className="mono green">{p.vested}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div style={{ marginTop: 12, fontSize: 11, color: 'var(--ink-muted)' }}>
-            Amara, Kofi, and Zara — three LPs, same pool, different ranges. Score reflects who actually showed up.
-          </div>
-        </div>
-      </div>
-
-      {/* CONTRACT ADDRESSES */}
-      <div className="grid-full">
-        <div className="card">
-          <div className="card-label">deployed contracts · Unichain Sepolia</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, marginTop: 16 }}>
-            {[
-              { label: 'Brook Hook',   addr: CONFIG.brook },
-              { label: 'PoolManager',  addr: CONFIG.poolManager },
-              { label: 'Token0 (BTA)', addr: CONFIG.token0 },
-              { label: 'Token1 (BTB)', addr: CONFIG.token1 },
-            ].map(({ label, addr }) => (
-              <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <span style={{ fontSize: 10, color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
-                <a
-                  href={`${CONFIG.explorer}/address/${addr}`}
-                  target="_blank" rel="noopener noreferrer"
-                  style={{ color: 'var(--teal)', fontFamily: 'var(--mono)', fontSize: 12, textDecoration: 'none' }}
-                >
-                  {addr}
-                </a>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* FOOTER */}
       <footer className="footer">
-  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-    <LogoMark size={22}/>
-    <span>Brook · Pre-audit, pre-mainnet</span>
-  </div>
-  <div style={{ display: 'flex', gap: 20 }}>
-    <a href="https://github.com/Fatumayattani/brook" target="_blank" rel="noopener noreferrer">GitHub</a>
-    <a href="https://atrium.academy/uniswap" target="_blank" rel="noopener noreferrer">UHI9 · Atrium</a>
-    <a href="https://docs.uniswap.org/contracts/v4" target="_blank" rel="noopener noreferrer">Uniswap v4</a>
-  </div>
-</footer>
+        <div className="foot-l"><LogoMark size={20}/> Brook · Pre-audit, pre-mainnet</div>
+        <div className="foot-r">
+          <a href="/docs.html">How to use</a>
+          <a href="https://github.com/Fatumayattani/brook" target="_blank" rel="noreferrer">GitHub</a>
+          <a href="https://atrium.academy/uniswap" target="_blank" rel="noreferrer">UHI9</a>
+        </div>
+      </footer>
+    </div>
+  )
+}
+
+function Step({ n, title, desc, btn, onClick, busy, disabled, done, highlight }) {
+  return (
+    <div className={`step ${done ? 'done' : ''} ${highlight ? 'hot' : ''}`}>
+      <div className="step-n">{done ? '✓' : n}</div>
+      <div className="step-body">
+        <div className="step-title">{title}</div>
+        <div className="step-desc">{desc}</div>
+      </div>
+      <button className="btn-primary sm" onClick={onClick} disabled={disabled || busy}>
+        {busy ? '…' : btn}
+      </button>
     </div>
   )
 }
