@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Brook · Pitch</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,ital,wght@9..144,0,300;9..144,0,400;9..144,0,500;9..144,1,300;9..144,1,400&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --paper:#f4f1e8; --paper-2:#ece8db; --paper-3:#e3ddcc;
+  --ink:#1a2e22; --ink-soft:#46594e; --ink-faint:#8a958c;
+  --green:#0f6e56; --green-bright:#1d9e75;
+  --rule:#cdc7b6; --rule-soft:#ddd8c9;
+  --amber:#9a5b18; --amber-bright:#c9852a;
+  --serif:'Fraunces',serif; --news:'Newsreader',serif; --mono:'DM Mono',monospace;
+}
+html,body{height:100%;width:100%;overflow:hidden;background:#222;font-family:var(--news)}
+.deck{width:100vw;height:100vh;position:relative;background:var(--paper)}
+.slide{position:absolute;inset:0;background:var(--paper);color:var(--ink);opacity:0;pointer-events:none;transition:opacity .45s ease;display:flex;flex-direction:column;padding:5vh 6vw}
+.slide.active{opacity:1;pointer-events:all}
+.head{display:flex;justify-content:space-between;align-items:center;padding-bottom:2.4vh;border-bottom:1px solid var(--ink);flex-shrink:0}
+.head-l{display:flex;align-items:center;gap:10px}
+.head-mark{width:26px;height:26px;border-radius:7px;background:var(--green);display:flex;align-items:center;justify-content:center}
+.head-name{font-family:var(--serif);font-size:17px;font-weight:400;letter-spacing:-0.01em}
+.head-section{font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:var(--ink-faint)}
+.body{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0}
+.kicker{font-family:var(--mono);font-size:clamp(10px,1vw,12px);letter-spacing:0.18em;text-transform:uppercase;color:var(--green);margin-bottom:2vh}
+.lede{font-family:var(--serif);font-weight:300;letter-spacing:-0.02em;line-height:1.04;color:var(--ink)}
+.lede em{font-style:italic;color:var(--green)}
+.foot{flex-shrink:0;padding-top:2vh;border-top:1px solid var(--rule);display:flex;justify-content:space-between;font-family:var(--mono);font-size:clamp(9px,0.85vw,11px);color:var(--ink-faint);letter-spacing:0.04em}
+#s1 .body{justify-content:flex-end}
+.cover-h{font-family:var(--serif);font-size:clamp(48px,8.5vw,108px);font-weight:300;line-height:0.92;letter-spacing:-0.04em;margin-bottom:3vh}
+.cover-h em{font-style:italic;color:var(--green)}
+.cover-stand{font-family:var(--news);font-style:italic;font-weight:300;font-size:clamp(16px,2vw,24px);line-height:1.5;color:var(--ink-soft);max-width:42ch}
+#s1 .head{border-bottom:none}
+#s1 .foot{border-top:1px solid var(--ink);padding-top:2.4vh}
+.prob-wrap{display:grid;grid-template-columns:1.1fr 1fr;gap:5vw;align-items:center;height:100%}
+.prob-stat{font-family:var(--serif);font-size:clamp(64px,11vw,150px);font-weight:300;font-style:italic;line-height:0.82;letter-spacing:-0.04em;color:var(--amber);margin-bottom:2.4vh}
+.prob-h{font-family:var(--serif);font-size:clamp(22px,2.6vw,34px);font-weight:300;line-height:1.12;letter-spacing:-0.015em;margin-bottom:2vh}
+.prob-p{font-family:var(--news);font-size:clamp(14px,1.5vw,18px);font-weight:300;line-height:1.6;color:var(--ink-soft)}
+.prob-p + .prob-p{margin-top:1.4vh}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:5vw;align-items:center;height:100%}
+.col-h{font-family:var(--serif);font-size:clamp(30px,4.5vw,54px);font-weight:300;line-height:1.04;letter-spacing:-0.025em;margin-bottom:2.4vh}
+.col-h em{font-style:italic;color:var(--green)}
+.col-h .amber{font-style:italic;color:var(--amber)}
+.col-p{font-family:var(--news);font-size:clamp(14px,1.55vw,18px);font-weight:300;line-height:1.62;color:var(--ink-soft)}
+.col-p + .col-p{margin-top:1.4vh}
+.col-p b{color:var(--ink);font-weight:400}
+.chart-card{background:var(--paper-2);border:1px solid var(--rule);border-radius:6px;padding:3vh 2vw}
+.chart-title{font-family:var(--mono);font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:2vh;display:flex;justify-content:space-between}
+.legend{display:flex;gap:16px}
+.legend span{display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0}
+.legend i{width:14px;height:2.5px;border-radius:2px;display:inline-block}
+.steps3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border-top:1px solid var(--ink);margin-top:3vh}
+.st{padding:2.6vh 1.6vw 0;border-right:1px solid var(--rule)}
+.st:last-child{border-right:none}
+.st-n{font-family:var(--serif);font-size:clamp(13px,1.4vw,15px);font-style:italic;color:var(--green);margin-bottom:1.4vh}
+.st-t{font-family:var(--serif);font-size:clamp(18px,2.2vw,26px);font-weight:300;margin-bottom:1vh;letter-spacing:-0.01em}
+.st-d{font-family:var(--news);font-size:clamp(12px,1.35vw,16px);font-weight:300;line-height:1.5;color:var(--ink-soft)}
+.who{display:grid;grid-template-columns:1fr 1fr;gap:2.4vh 4vw;margin-top:1vh}
+.who-lead{display:grid;grid-template-columns:1fr 1fr;gap:4vw;margin-bottom:3vh;padding-bottom:3vh;border-bottom:1px solid var(--rule)}
+.wl-tag{font-family:var(--mono);font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--green);margin-bottom:1vh}
+.wl-t{font-family:var(--serif);font-size:clamp(20px,2.4vw,28px);font-weight:400;margin-bottom:0.8vh;letter-spacing:-0.01em}
+.wl-d{font-family:var(--news);font-size:clamp(13px,1.45vw,17px);font-weight:300;line-height:1.55;color:var(--ink-soft)}
+.wrow{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:baseline}
+.wrow b{font-family:var(--serif);font-weight:400;font-size:clamp(14px,1.5vw,17px);color:var(--ink);white-space:nowrap}
+.wrow span{font-family:var(--news);font-weight:300;font-size:clamp(12px,1.35vw,15px);color:var(--ink-soft);line-height:1.4}
+.sus{display:grid;grid-template-columns:1fr 1fr;gap:2.4vh 4vw;margin-top:2vh}
+.sus-item{padding-left:18px;border-left:2px solid var(--green)}
+.sus-t{font-family:var(--serif);font-size:clamp(17px,2vw,23px);font-weight:400;margin-bottom:0.6vh;letter-spacing:-0.01em}
+.sus-d{font-family:var(--news);font-size:clamp(13px,1.4vw,16px);font-weight:300;line-height:1.55;color:var(--ink-soft)}
+.biz{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border-top:1px solid var(--ink);margin-top:3vh}
+.math-formulas{display:flex;flex-direction:column;gap:1.2vh;margin:2.4vh 0}
+.formula{font-family:var(--mono);font-size:clamp(11px,1.15vw,14px);color:var(--green);background:var(--paper-2);border:1px solid var(--rule);border-radius:6px;padding:1.6vh 1.8vw;letter-spacing:-0.01em;line-height:1.4}
+.formula b{color:var(--ink);font-weight:500}
+.formula span{color:var(--ink-faint)}
+.math-grid{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--ink);border-bottom:1px solid var(--ink);margin-top:1vh}
+.mc{padding:2.2vh 1vw;text-align:center;border-right:1px solid var(--rule)}
+.mc:last-child{border-right:none}
+.mc.hi{background:var(--paper-2)}
+.mc-pct{font-family:var(--mono);font-size:clamp(8px,0.9vw,10px);color:var(--ink-faint);margin-bottom:0.8vh;letter-spacing:0.03em}
+.mc-v{font-family:var(--serif);font-size:clamp(26px,3.4vw,40px);font-weight:300;font-style:italic;color:var(--green);line-height:1}
+.mc-n{font-family:var(--news);font-size:clamp(10px,1.1vw,13px);font-style:italic;color:var(--ink-soft);margin-top:0.8vh}
+.math-note{font-family:var(--news);font-size:clamp(12px,1.4vw,16px);font-style:italic;font-weight:300;color:var(--ink-soft);text-align:center;margin-top:2.4vh}
+.road{display:grid;grid-template-columns:1fr 1fr;gap:4vw;margin-top:2.4vh}
+.road-col-h{font-family:var(--mono);font-size:clamp(10px,1.05vw,12px);letter-spacing:0.12em;text-transform:uppercase;color:var(--green);padding-bottom:1.4vh;border-bottom:1px solid var(--ink);margin-bottom:1.8vh}
+.road-col-h.ahead{color:var(--amber)}
+.ritem{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:baseline;margin-bottom:1.3vh}
+.ritem .mk{font-family:var(--mono);font-size:clamp(11px,1.2vw,14px);line-height:1}
+.ritem.done .mk{color:var(--green)}
+.ritem.todo .mk{color:var(--amber-bright)}
+.ritem .rt{font-family:var(--news);font-size:clamp(13px,1.45vw,17px);font-weight:300;color:var(--ink-soft);line-height:1.4}
+.ritem.done .rt b,.ritem.todo .rt b{font-family:var(--serif);font-weight:400;color:var(--ink)}
+.biz-c{padding:2.6vh 1.8vw 0;border-right:1px solid var(--rule)}
+.biz-c:last-child{border-right:none}
+.biz-n{font-family:var(--serif);font-size:clamp(13px,1.4vw,15px);font-style:italic;color:var(--green);margin-bottom:1.4vh}
+.biz-t{font-family:var(--serif);font-size:clamp(17px,2vw,24px);font-weight:300;margin-bottom:1vh;letter-spacing:-0.01em}
+.biz-d{font-family:var(--news);font-size:clamp(12px,1.35vw,16px);font-weight:300;line-height:1.5;color:var(--ink-soft)}
+.proof{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--ink);border-bottom:1px solid var(--ink);margin:3vh 0}
+.pf{padding:3vh 1vw;text-align:center;border-right:1px solid var(--rule)}
+.pf:last-child{border-right:none}
+.pf-v{font-family:var(--serif);font-size:clamp(34px,5vw,56px);font-weight:300;font-style:italic;color:var(--green);line-height:1}
+.pf-l{font-family:var(--mono);font-size:clamp(9px,1vw,11px);text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-faint);margin-top:1vh}
+.proof-note{font-family:var(--news);font-size:clamp(13px,1.5vw,17px);font-style:italic;font-weight:300;color:var(--ink-soft);text-align:center}
+#s10 .body{align-items:center;justify-content:center;text-align:center}
+#s10 .head{border-bottom:none}
+.close-h{font-family:var(--serif);font-size:clamp(44px,8vw,92px);font-weight:300;line-height:0.96;letter-spacing:-0.035em;margin-bottom:2.4vh}
+.close-h em{font-style:italic;color:var(--green)}
+.close-sub{font-family:var(--news);font-size:clamp(15px,1.8vw,20px);font-weight:300;font-style:italic;color:var(--ink-soft);max-width:46ch;margin:0 auto 4vh;line-height:1.5}
+.close-links{display:flex;gap:0;border-top:1px solid var(--ink);border-bottom:1px solid var(--ink)}
+.close-a{font-family:var(--mono);font-size:clamp(11px,1.2vw,13px);padding:1.8vh 2vw;text-decoration:none;color:var(--green);border-right:1px solid var(--rule);letter-spacing:0.03em}
+.close-a:last-child{border-right:none}
+.ctrl{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:14px;background:var(--paper);border:1px solid var(--rule);border-radius:100px;padding:7px 16px;z-index:99;box-shadow:0 4px 20px rgba(0,0,0,0.15)}
+.nb{background:none;border:none;color:var(--ink-soft);cursor:pointer;font-family:var(--mono);font-size:13px;padding:2px 8px;border-radius:100px}
+.nb:hover{color:var(--green)}.nb:disabled{opacity:.25;cursor:not-allowed}
+.dots{display:flex;gap:5px}
+.dot{width:5px;height:5px;border-radius:50%;background:var(--rule);cursor:pointer;transition:all .25s}
+.dot.on{background:var(--green);width:15px;border-radius:3px}
+.pg{font-family:var(--mono);font-size:9px;color:var(--ink-faint);min-width:42px;text-align:center}
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+
+<section class="slide active" id="s1">
+  <div class="head"><div class="head-l"><div class="head-mark"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M1 11 Q5 7 9.5 11T17 11T20 11" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round"/><path d="M1 15 Q5 11 9.5 15T17 15T20 15" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round" opacity=".55"/></svg></div><div class="head-name">Brook</div></div><div class="head-section">UHI9</div></div>
+  <div class="body"><div class="kicker">A Uniswap v4 Hook</div><h1 class="cover-h"><em>Steady yield</em><br/>for committed LPs.</h1><p class="cover-stand">Brook turns volatile swap fees into predictable, paycheck style income, so serious capital can finally provide liquidity.</p></div>
+  <div class="foot"><span>Built by Fatuma Yattani</span><span>Nairobi</span></div>
+</section>
+
+<section class="slide" id="s2">
+  <div class="head"><div class="head-l"><div class="head-mark"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M1 11 Q5 7 9.5 11T17 11T20 11" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round"/><path d="M1 15 Q5 11 9.5 15T17 15T20 15" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round" opacity=".55"/></svg></div><div class="head-name">Brook</div></div><div class="head-section">01 · The Problem</div></div>
+  <div class="body"><div class="prob-wrap">
+    <div><div class="prob-stat">$260B</div><div class="prob-h">in stablecoins, mostly sitting idle.</div></div>
+    <div><p class="prob-p">Liquidity provider income is fundamentally lumpy. Fees arrive only when swaps happen, so a pool might pay 80% APR one week when volume spikes, then almost nothing the next when it goes quiet.</p><p class="prob-p">For a retail farmer chasing the next spike, that is fine. But for an institutional LP, a stablecoin protocol, or anyone who has to report income and plan a budget, unpredictable means unusable.</p><p class="prob-p"><b>The volatility itself is the barrier.</b> Over $260B in stablecoins exist, yet most sits idle rather than providing liquidity. Predictability is the unlock.</p></div>
+  </div></div>
+  <div class="foot"><span>Brook</span><span>01</span></div>
+</section>
+
+<section class="slide" id="s3">
+  <div class="head"><div class="head-l"><div class="head-mark"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M1 11 Q5 7 9.5 11T17 11T20 11" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round"/><path d="M1 15 Q5 11 9.5 15T17 15T20 15" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round" opacity=".55"/></svg></div><div class="head-name">Brook</div></div><div class="head-section">02 · Why It Happens</div></div>
+  <div class="body"><div class="cols">
+    <div><div class="kicker">Root Cause</div><h2 class="col-h">Fees pay out <span class="amber">the instant</span> they are earned.</h2><p class="col-p">Every swap pays its fee straight to whoever holds liquidity at that exact moment. There is no memory, no averaging.</p><p class="col-p">So <b>mercenary capital</b> floods in right before a high volume event, collects the fat fees, and leaves. The patient LP who stayed all month earns whatever is left on the quiet days.</p><p class="col-p">The mechanism rewards perfect timing, not commitment. That is exactly backwards for anyone who wants to provide liquidity and hold.</p></div>
+    <div class="chart-card"><div class="chart-title"><span>LP fee income, per day</span></div>
+      <svg viewBox="0 0 440 240" style="width:100%;height:auto">
+        <line x1="34" y1="10" x2="34" y2="200" stroke="#cdc7b6" stroke-width="1"/><line x1="34" y1="200" x2="430" y2="200" stroke="#cdc7b6" stroke-width="1"/>
+        <g fill="#c9852a" opacity="0.85"><rect x="50" y="150" width="20" height="50"/><rect x="80" y="60" width="20" height="140"/><rect x="110" y="175" width="20" height="25"/><rect x="140" y="40" width="20" height="160"/><rect x="170" y="185" width="20" height="15"/><rect x="200" y="120" width="20" height="80"/><rect x="230" y="30" width="20" height="170"/><rect x="260" y="180" width="20" height="20"/><rect x="290" y="165" width="20" height="35"/><rect x="320" y="90" width="20" height="110"/><rect x="350" y="178" width="20" height="22"/><rect x="380" y="140" width="20" height="60"/></g>
+        <text x="56" y="225" font-family="DM Mono" font-size="10" fill="#8a958c">a real LP's week to week reality</text>
+      </svg>
+    </div>
+  </div></div>
+  <div class="foot"><span>Brook</span><span>02</span></div>
+</section>
+
+<section class="slide" id="s4">
+  <div class="head"><div class="head-l"><div class="head-mark"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M1 11 Q5 7 9.5 11T17 11T20 11" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round"/><path d="M1 15 Q5 11 9.5 15T17 15T20 15" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round" opacity=".55"/></svg></div><div class="head-name">Brook</div></div><div class="head-section">03 · The Solution</div></div>
+  <div class="body"><div class="cols">
+    <div><div class="kicker">What Brook does</div><h2 class="col-h">It turns the spikes into a <em>steady stream.</em></h2><p class="col-p">Brook holds back a slice of every swap fee in a shared buffer instead of paying it out instantly. The buffer fills all week.</p><p class="col-p">When the week closes, that buffer becomes <b>next</b> week's paycheck, released to LPs smoothly over the following seven days, weighted by who actually stayed in range.</p><p class="col-p">Same total fees. But the jagged orange line becomes the smooth green one. <b>Predictable enough to budget against.</b></p></div>
+    <div class="chart-card"><div class="chart-title"><span>Same fees, smoothed</span><span class="legend"><span><i style="background:#c9852a"></i>raw</span><span><i style="background:#1d9e75"></i>Brook</span></span></div>
+      <svg viewBox="0 0 440 240" style="width:100%;height:auto">
+        <line x1="34" y1="10" x2="34" y2="200" stroke="#cdc7b6" stroke-width="1"/><line x1="34" y1="200" x2="430" y2="200" stroke="#cdc7b6" stroke-width="1"/>
+        <polyline fill="none" stroke="#c9852a" stroke-width="1.5" opacity="0.55" points="50,150 80,60 110,175 140,45 170,185 200,120 230,35 260,180 290,165 320,95 350,178 380,140 410,100"/>
+        <polyline fill="none" stroke="#1d9e75" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="50,160 80,150 110,142 140,135 170,128 200,123 230,118 260,116 290,114 320,112 350,111 380,110 410,110"/>
+        <text x="56" y="225" font-family="DM Mono" font-size="10" fill="#8a958c">same area under the curve, predictable payout</text>
+      </svg>
+    </div>
+  </div></div>
+  <div class="foot"><span>Brook</span><span>03</span></div>
+</section>
+
+<section class="slide" id="s5">
+  <div class="head"><div class="head-l"><div class="head-mark"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M1 11 Q5 7 9.5 11T17 11T20 11" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round"/><path d="M1 15 Q5 11 9.5 15T17 15T20 15" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round" opacity=".55"/></svg></div><div class="head-name">Brook</div></div><div class="head-section">04 · How It Works</div></div>
+  <div class="body">
+    <div><h2 class="col-h">Three steps, <em>one hook.</em></h2><p class="col-p" style="max-width:62ch">Brook runs entirely inside the pool's own lifecycle. No keepers, no off chain bots, no extra trust. Every swap does the work.</p></div>
+    <div class="steps3"><div class="st"><div class="st-n">i. Every swap</div><div class="st-t">Skim</div><div class="st-d">A configurable share of each swap's output, 20% by default, is set aside into the epoch buffer instead of paying LPs immediately.</div></div><div class="st"><div class="st-n">ii. Every epoch</div><div class="st-t">Roll</div><div class="st-d">When the epoch ends, the buffer closes and becomes the payout pool for the next epoch. Last week funds this week.</div></div><div class="st"><div class="st-n">iii. Continuously</div><div class="st-t">Stream</div><div class="st-d">LPs draw their share smoothly over the epoch, weighted by how long their liquidity actually sat in range.</div></div></div>
+  </div>
+  <div class="foot"><span>Brook</span><span>04</span></div>
+</section>
+
+<section class="slide" id="s5b">
+  <div class="head"><div class="head-l"><div class="head-mark"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M1 11 Q5 7 9.5 11T17 11T20 11" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round"/><path d="M1 15 Q5 11 9.5 15T17 15T20 15" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round" opacity=".55"/></svg></div><div class="head-name">Brook</div></div><div class="head-section">05 · The Math</div></div>
+  <div class="body">
+    <div><h2 class="col-h">Yield weighted by <em>commitment.</em></h2><p class="col-p" style="max-width:64ch">An LP's share of the buffer is set by a single score. The longer your liquidity sits in range, the higher it climbs, and yield streams out smoothly as the epoch elapses.</p></div>
+    <div class="math-formulas">
+      <div class="formula"><b>score</b> = liquidity × (inRangeTime × m + outOfRangeTime) <span>÷</span> m<span>&nbsp;&nbsp;(m = multiplier, default 4)</span></div>
+      <div class="formula"><b>share</b> = buffer × score <span>÷</span> totalScore</div>
+      <div class="formula"><b>vested</b> = share × elapsed <span>÷</span> epochLength<span>&nbsp;&nbsp;(linear stream)</span></div>
+    </div>
+    <div class="math-grid">
+      <div class="mc hi"><div class="mc-pct">100% in range</div><div class="mc-v">1.00×</div><div class="mc-n">full commitment</div></div>
+      <div class="mc"><div class="mc-pct">50% in range</div><div class="mc-v">0.63×</div><div class="mc-n">half the time</div></div>
+      <div class="mc"><div class="mc-pct">25% in range</div><div class="mc-v">0.44×</div><div class="mc-n">occasional</div></div>
+      <div class="mc"><div class="mc-pct">0% in range</div><div class="mc-v">0.25×</div><div class="mc-n">still earns</div></div>
+    </div>
+    <p class="math-note">A fully committed LP earns about 2.3× more than a 25% one. Out of range still earns. Brook rewards commitment, it does not punish.</p>
+  </div>
+  <div class="foot"><span>Brook</span><span>05</span></div>
+</section>
+
+<section class="slide" id="s6">
+  <div class="head"><div class="head-l"><div class="head-mark"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M1 11 Q5 7 9.5 11T17 11T20 11" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round"/><path d="M1 15 Q5 11 9.5 15T17 15T20 15" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round" opacity=".55"/></svg></div><div class="head-name">Brook</div></div><div class="head-section">06 · Who It's For</div></div>
+  <div class="body"><div>
+    <div class="who-lead">
+      <div class="wl"><div class="wl-tag">Beachhead</div><div class="wl-t">Institutional LPs</div><div class="wl-d">Funds and professional desks that need reportable, predictable returns. They cannot manage positions actively or justify chaotic week to week income to their own stakeholders. Brook gives them yield they can stand behind.</div></div>
+      <div class="wl"><div class="wl-tag">Unlocks a category</div><div class="wl-t">Structured Products</div><div class="wl-d">LP bonds and fixed rate vaults cannot exist on top of random yield. A smooth, predictable underlying is the raw material. Brook makes a whole class of DeFi fixed income buildable.</div></div>
+    </div>
+    <div class="who"><div class="wrow"><b>Stablecoin & LST pools,</b><span>committed capital that matches committed yield</span></div><div class="wrow"><b>Yield aggregators,</b><span>a stable APR they can actually quote to users</span></div><div class="wrow"><b>Token projects,</b><span>seed a pool with sticky, long term aligned liquidity</span></div><div class="wrow"><b>DAO treasuries,</b><span>legible cash flow for governance and reporting</span></div></div>
+  </div></div>
+  <div class="foot"><span>Brook</span><span>06</span></div>
+</section>
+
+<section class="slide" id="s7">
+  <div class="head"><div class="head-l"><div class="head-mark"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M1 11 Q5 7 9.5 11T17 11T20 11" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round"/><path d="M1 15 Q5 11 9.5 15T17 15T20 15" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round" opacity=".55"/></svg></div><div class="head-name">Brook</div></div><div class="head-section">07 · Business Model</div></div>
+  <div class="body">
+    <div><h2 class="col-h">Brook earns <em>when LPs earn.</em></h2><p class="col-p" style="max-width:62ch">No token, no emissions, no rent seeking. Brook takes a small, configurable cut of the smoothing flow it already manages, so revenue scales directly with the yield it delivers.</p></div>
+    <div class="biz"><div class="biz-c"><div class="biz-n">How it captures value</div><div class="biz-t">A slice of the flow</div><div class="biz-d">A small configurable protocol fee on the smoothing buffer Brook already routes. Revenue from real swap fees, never from inflation.</div></div><div class="biz-c"><div class="biz-n">Why it scales</div><div class="biz-t">More pools, more volume</div><div class="biz-d">Every new pool and every swap widens the flow. Brook grows with adoption across any chain running Uniswap v4.</div></div><div class="biz-c"><div class="biz-n">Why it aligns</div><div class="biz-t">Paid to perform</div><div class="biz-d">Brook only earns when it is actually delivering yield to LPs. Incentives point the same direction as its users.</div></div></div>
+  </div>
+  <div class="foot"><span>Brook</span><span>07</span></div>
+</section>
+
+<section class="slide" id="s8">
+  <div class="head"><div class="head-l"><div class="head-mark"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M1 11 Q5 7 9.5 11T17 11T20 11" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round"/><path d="M1 15 Q5 11 9.5 15T17 15T20 15" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round" opacity=".55"/></svg></div><div class="head-name">Brook</div></div><div class="head-section">08 · Why It Lasts</div></div>
+  <div class="body">
+    <div><h2 class="col-h">No subsidies. <em>Pure mechanism.</em></h2><p class="col-p" style="max-width:60ch">Brook needs no token emissions and no incentives to function. The yield is real fee revenue, and the design compounds its own demand.</p></div>
+    <div class="sus"><div class="sus-item"><div class="sus-t">Real yield, not emissions</div><div class="sus-d">Every token paid out was earned from an actual swap. Nothing is minted or subsidized, so there is nothing to run dry.</div></div><div class="sus-item"><div class="sus-t">A self reinforcing loop</div><div class="sus-d">Predictable yield attracts committed LPs, deeper and stabler liquidity, more volume, a larger buffer, better yield.</div></div><div class="sus-item"><div class="sus-t">Aligned by design</div><div class="sus-d">Brook only earns when LPs earn. No misaligned rent, no extraction that drives users away.</div></div><div class="sus-item"><div class="sus-t">Multi chain by design</div><div class="sus-d">One script, one RPC. Brook deploys on any chain running Uniswap v4, wherever serious liquidity lives.</div></div></div>
+  </div>
+  <div class="foot"><span>Brook</span><span>08</span></div>
+</section>
+
+<section class="slide" id="s9">
+  <div class="head"><div class="head-l"><div class="head-mark"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M1 11 Q5 7 9.5 11T17 11T20 11" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round"/><path d="M1 15 Q5 11 9.5 15T17 15T20 15" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round" opacity=".55"/></svg></div><div class="head-name">Brook</div></div><div class="head-section">09 · Roadmap</div></div>
+  <div class="body"><div>
+    <h2 class="col-h">Live today. <em>Built to go further.</em></h2>
+    <div class="road">
+      <div>
+        <div class="road-col-h">Accomplished</div>
+        <div class="ritem done"><span class="mk">✓</span><span class="rt"><b>Full hook mechanism</b> skim, roll, stream, and claim</span></div>
+        <div class="ritem done"><span class="mk">✓</span><span class="rt"><b>Range weighted scoring</b> commitment rewarded, not punished</span></div>
+        <div class="ritem done"><span class="mk">✓</span><span class="rt"><b>101 passing tests</b> unit, integration, fuzz, edge cases</span></div>
+        <div class="ritem done"><span class="mk">✓</span><span class="rt"><b>Deployed and verified</b> live on Unichain Sepolia</span></div>
+        <div class="ritem done"><span class="mk">✓</span><span class="rt"><b>Periphery router</b> self serve access for any wallet</span></div>
+        <div class="ritem done"><span class="mk">✓</span><span class="rt"><b>Live frontend</b> mint, provide, swap, and claim end to end</span></div>
+      </div>
+      <div>
+        <div class="road-col-h ahead">Ahead</div>
+        <div class="ritem todo"><span class="mk">→</span><span class="rt"><b>Security audit</b> and formal verification</span></div>
+        <div class="ritem todo"><span class="mk">→</span><span class="rt"><b>Mainnet deployment</b> production launch on Unichain</span></div>
+        <div class="ritem todo"><span class="mk">→</span><span class="rt"><b>Multichain rollout</b> architected for any v4 chain, a salt mine and config away</span></div>
+        <div class="ritem todo"><span class="mk">→</span><span class="rt"><b>Hooks routing allowlist</b> submission for Labs interface routing</span></div>
+        <div class="ritem todo"><span class="mk">→</span><span class="rt"><b>Ecosystem layer</b> structured products, protocol fee, integrations</span></div>
+      </div>
+    </div>
+  </div></div>
+  <div class="foot"><span>Brook</span><span>09</span></div>
+</section>
+
+<section class="slide" id="s10">
+  <div class="head"><div class="head-l"><div class="head-mark"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M1 11 Q5 7 9.5 11T17 11T20 11" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round"/><path d="M1 15 Q5 11 9.5 15T17 15T20 15" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round" opacity=".55"/></svg></div><div class="head-name">Brook</div></div><div class="head-section">Thank you</div></div>
+  <div class="body"><h2 class="close-h">Thank you, <em>Atrium</em><br/>and <em>Uniswap.</em></h2><p class="close-sub">For the curriculum, the office hours, and the room to build. Brook exists because UHI9 made space for it.</p><div class="close-links"><a class="close-a" href="https://brook-hook.xyz" target="_blank">brook-hook.xyz</a><a class="close-a" href="https://github.com/Fatumayattani/brook" target="_blank">GitHub</a><a class="close-a" href="https://unichain-sepolia.blockscout.com/address/0xef91EAf413170cAD2f65B3f05E969759df0AA744" target="_blank">Live contract</a></div></div>
+  <div class="foot"><span>Built by Fatuma Yattani · Nairobi</span><span>UHI9</span></div>
+</section>
+
+</div>
+<div class="ctrl"><button class="nb" id="pb" onclick="nav(-1)" disabled>←</button><div class="dots" id="dots"></div><span class="pg" id="pg">1 / 11</span><button class="nb" id="nx" onclick="nav(1)">→</button></div>
+<script>
+const slides=[...document.querySelectorAll('.slide')],N=slides.length;let cur=0;
+const dots=document.getElementById('dots');
+slides.forEach((_,i)=>{const d=document.createElement('div');d.className='dot'+(i===0?' on':'');d.onclick=()=>go(i);dots.appendChild(d)});
+function go(n){slides[cur].classList.remove('active');cur=n;slides[cur].classList.add('active');[...dots.children].forEach((d,i)=>d.classList.toggle('on',i===cur));document.getElementById('pg').textContent=`${cur+1} / ${N}`;document.getElementById('pb').disabled=cur===0;document.getElementById('nx').disabled=cur===N-1}
+function nav(d){const n=cur+d;if(n>=0&&n<N)go(n)}
+document.addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key==='ArrowDown'||e.key===' ')nav(1);if(e.key==='ArrowLeft'||e.key==='ArrowUp')nav(-1);if(e.key==='f'||e.key==='F')document.documentElement.requestFullscreen?.()});
+</script>
+</body>
+</html>
