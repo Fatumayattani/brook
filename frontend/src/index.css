@@ -19,8 +19,8 @@ a{color:inherit}
 .app{max-width:1080px;margin:0 auto;padding:0 24px 80px}
 
 /* nav */
-.nav{display:flex;justify-content:space-between;align-items:center;padding:24px 0 32px;border-bottom:1px solid var(--border);margin-bottom:40px}
-.nav-logo{display:flex;align-items:center;gap:11px;font-family:var(--serif);font-size:20px;font-weight:300;letter-spacing:-0.02em}
+.nav{display:flex;justify-content:space-between;align-items:center;padding:24px 0 32px;border-bottom:1px solid var(--border);margin-bottom:40px;gap:16px;flex-wrap:wrap}
+.nav-logo{display:flex;align-items:center;gap:11px;font-family:var(--serif);font-size:20px;font-weight:300;letter-spacing:-0.02em;flex-shrink:0}
 .logo-svg{background:var(--teal);display:flex;align-items:center;justify-content:center;box-shadow:0 0 20px rgba(29,158,117,0.4)}
 .nav-meta{display:flex;align-items:center;gap:18px;font-size:12px;color:var(--ink-muted)}
 .live-dot{display:flex;align-items:center;gap:6px;color:var(--teal-bright)}
@@ -28,6 +28,13 @@ a{color:inherit}
 @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(1.4)}}
 .nav-link{color:var(--ink-muted);text-decoration:none;transition:color .2s}.nav-link:hover{color:var(--teal-bright)}
 .wallet-pill{font-family:var(--mono);color:var(--teal);background:var(--teal-glow);border:1px solid var(--border);padding:4px 10px;border-radius:100px}
+@media(max-width:560px){
+  .nav{padding:18px 0 22px;margin-bottom:28px;gap:12px}
+  .nav-logo{font-size:18px}
+  .nav-meta{gap:12px;font-size:11px}
+  .nav-meta .btn-ghost.sm{padding:7px 12px;font-size:11px}
+  .wallet-pill{font-size:11px;padding:4px 9px}
+}
 
 /* hero */
 .hero{margin-bottom:40px;animation:fade .6s ease-out both}

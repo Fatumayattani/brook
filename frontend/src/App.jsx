@@ -219,10 +219,11 @@ export default function App() {
         <div className="nav-logo"><LogoMark size={32}/> Brook</div>
         <div className="nav-meta">
           <a className="nav-link" href="/docs.html">Docs</a>
+          <a className="nav-link" href="/pitch.html">Pitch</a>
+          <a className="nav-link" href="https://github.com/Fatumayattani/brook" target="_blank" rel="noreferrer">GitHub</a>
           {wallet
             ? <span className="wallet-pill">{short(wallet)}</span>
             : <button className="btn-ghost sm" onClick={connect}>Connect Wallet</button>}
-          <a className="nav-link" href="https://github.com/Fatumayattani/brook" target="_blank" rel="noreferrer">GitHub</a>
         </div>
       </nav>
 
