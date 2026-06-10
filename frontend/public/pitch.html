@@ -118,10 +118,13 @@ html,body{height:100%;width:100%;overflow:hidden;background:#222;font-family:var
 .dot{width:5px;height:5px;border-radius:50%;background:var(--rule);cursor:pointer;transition:all .25s}
 .dot.on{background:var(--green);width:15px;border-radius:3px}
 .pg{font-family:var(--mono);font-size:9px;color:var(--ink-faint);min-width:42px;text-align:center}
+.back-app{position:fixed;top:16px;left:18px;font-family:var(--mono);font-size:11px;color:var(--ink-faint);text-decoration:none;letter-spacing:0.03em;z-index:99;transition:color .2s}
+.back-app:hover{color:var(--green)}
 </style>
 </head>
 <body>
 <div class="deck" id="deck">
+  <a class="back-app" href="/">← back to app</a>
 
 <section class="slide active" id="s1">
   <div class="head"><div class="head-l"><div class="head-mark"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M1 11 Q5 7 9.5 11T17 11T20 11" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round"/><path d="M1 15 Q5 11 9.5 15T17 15T20 15" stroke="#f4f1e8" stroke-width="2.2" stroke-linecap="round" opacity=".55"/></svg></div><div class="head-name">Brook</div></div><div class="head-section">UHI9</div></div>
