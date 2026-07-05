@@ -889,7 +889,36 @@ function test_inRange_timeDoesNotAccumulateWhenOutOfRange() public {
     assertEq(lp.inRangeTime, 0);
     assertGt(lp.totalTime, 0);
 }
+function test_inRange_settlementRefreshesTickAtLiquidityEvents() public {
+    PoolKey memory key = _makePoolKey();
+    bytes32 id = _poolId(key);
+    _initPool(key);
 
+    // LP with a narrow range around tick 0.
+    _addLiquidity(key, -120, 120, 1000e6);
+
+    // Big swap pushes the price OUT of the LP's range.
+    _swap(key, true, -500000000);
+    Types.EpochState memory epAfterSwap = brook.getEpochState(id);
+    assertTrue(
+        epAfterSwap.currentTick < -120,
+        "price should be pushed below the LP's range"
+    );
+
+    bytes32 posKey = _positionKey(address(router), -120, 120, bytes32(0));
+
+    // Time passes with no swaps at all.
+    vm.warp(block.timestamp + 1 days);
+
+    // Top-up triggers settlement. With the tick refresh, settlement reads the
+    // live tick at this liquidity event rather than relying on swap-time state.
+    _addLiquidity(key, -120, 120, 1e6);
+
+    Types.LPState memory lp = brook.getLPState(id, posKey);
+
+    // The elapsed day was spent out of range, so inRangeTime must NOT include it.
+    assertLt(lp.inRangeTime, lp.totalTime, "out-of-range day must not count as in-range");
+}
 // ---------------------------------------------------------------------
 // hardening
 // ---------------------------------------------------------------------
