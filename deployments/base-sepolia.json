@@ -1,0 +1,18 @@
+{
+  "network": "Base Sepolia",
+  "chainId": 84532,
+  "status": "ready-to-deploy",
+  "poolManager": "0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408",
+  "rpc": "https://sepolia.base.org",
+  "explorer": "https://sepolia.basescan.org",
+  "notes": "Brook is architected for any v4 chain. Base Sepolia's canonical PoolManager is resolved automatically via hookmate AddressConstants. Deploy with the standard scripts (see deployments/README.md); the CREATE2 salt is mined fresh for this chain so the Brook address encodes the correct hook permission flags.",
+  "brook": "",
+  "brookRouter": "",
+  "seededPool": {
+    "token0": "",
+    "token1": "",
+    "poolId": "",
+    "fee": 3000,
+    "tickSpacing": 60
+  }
+}

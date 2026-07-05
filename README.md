@@ -13,6 +13,10 @@ Brook is deployed, verified, and testable today on Unichain Sepolia.
 - **BrookRouter:** [`0x57b79d383E951227C9d0479eFd031a7Ca73fB81e`](https://unichain-sepolia.blockscout.com/address/0x57b79d383E951227C9d0479eFd031a7Ca73fB81e)
 - **101 passing tests** across unit, integration, fuzz, and edge cases
 
+### Multichain by architecture
+
+Brook contains no chain-specific logic. The canonical Uniswap v4 PoolManager for each chain is resolved automatically at deploy time, so Brook can run on any chain that supports v4. It is **live and verified on Unichain Sepolia today**, with deployment scripted and ready for Base Sepolia (chainId 84532) and any other v4 chain. See [`deployments/`](./deployments) for the full deployment matrix and step-by-step guide.
+
 ## The problem
 
 LP income on Uniswap is wildly volatile. Some weeks bring high APR, others bring zero. That volatility is fine for retail farmers but it disqualifies an entire class of capital - institutional LPs, stablecoin LPs, structured product builders, and DAO treasuries who need legible cash flows for governance, accounting, and reporting.

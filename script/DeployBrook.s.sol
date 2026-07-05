@@ -94,6 +94,7 @@ contract DeployBrook is Script {
             || chainId == 43114      // Avalanche
             || chainId == 57073      // Ink
             || chainId == 81457      // Blast
-            || chainId == 7777777;   // Zora
+            || chainId == 7777777    // Zora
+            || chainId == 84532;     // Base Sepolia
     }
 }
