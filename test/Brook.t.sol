@@ -112,6 +112,55 @@ contract TestRouter {
     }
 }
 
+/// @dev Minimal mock of a trusted router that exposes the original user via
+///      IMsgSender, mirroring how Uniswap's Universal Router reports msg.sender.
+contract MockMsgSenderRouter {
+    IPoolManager public immutable manager;
+    address public currentUser;
+
+    constructor(IPoolManager _manager) {
+        manager = _manager;
+    }
+
+    function msgSender() external view returns (address) {
+        return currentUser;
+    }
+
+    function addLiquidityFor(
+        address user,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params
+    ) external {
+        currentUser = user;
+        manager.unlock(abi.encode(key, params, user));
+        currentUser = address(0);
+    }
+
+    function unlockCallback(bytes calldata data) external returns (bytes memory) {
+        require(msg.sender == address(manager), "not manager");
+        (PoolKey memory key, ModifyLiquidityParams memory params, address payer) =
+            abi.decode(data, (PoolKey, ModifyLiquidityParams, address));
+
+        (BalanceDelta delta,) = manager.modifyLiquidity(key, params, "");
+
+        if (delta.amount0() < 0) {
+            manager.sync(key.currency0);
+            MockERC20(Currency.unwrap(key.currency0)).transferFrom(
+                payer, address(manager), uint128(-delta.amount0())
+            );
+            manager.settle();
+        }
+        if (delta.amount1() < 0) {
+            manager.sync(key.currency1);
+            MockERC20(Currency.unwrap(key.currency1)).transferFrom(
+                payer, address(manager), uint128(-delta.amount1())
+            );
+            manager.settle();
+        }
+        return "";
+    }
+}
+
 contract BrookTest is Test {
     address constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
@@ -1263,5 +1312,74 @@ function test_edge_noSwaps_lpWithdrawsCleanly() public {
         assertEq(lp.lastTouched, 0);
         assertEq(lp.pendingClaim, 0);
         assertEq(lp.scoreSnapshot, 0);
+    }
+
+    // Trusted router (IMsgSender) tests
+
+    function test_trustedRouter_positionKeysToRealUser() public {
+        PoolKey memory key = _makePoolKey();
+        bytes32 id = _poolId(key);
+        _initPool(key);
+
+        MockMsgSenderRouter trusted = new MockMsgSenderRouter(poolManager);
+        address alice = makeAddr("alice");
+
+        token0.mint(alice, 1_000_000 ether);
+        token1.mint(alice, 1_000_000 ether);
+        vm.startPrank(alice);
+        token0.approve(address(trusted), type(uint256).max);
+        token1.approve(address(trusted), type(uint256).max);
+        vm.stopPrank();
+
+        brook.setTrustedRouter(address(trusted), true);
+
+        trusted.addLiquidityFor(alice, key, ModifyLiquidityParams({
+            tickLower: -120,
+            tickUpper: 120,
+            liquidityDelta: 1000e6,
+            salt: bytes32(0)
+        }));
+
+        bytes32 aliceKey  = _positionKey(alice, -120, 120, bytes32(0));
+        bytes32 routerKey = _positionKey(address(trusted), -120, 120, bytes32(0));
+
+        assertEq(brook.getLPState(id, aliceKey).liquidity, uint128(1000e6), "position keys to real user");
+        assertEq(brook.getLPState(id, routerKey).liquidity, 0, "router holds no position");
+    }
+
+    function test_untrustedRouter_positionKeysToRouter() public {
+        PoolKey memory key = _makePoolKey();
+        bytes32 id = _poolId(key);
+        _initPool(key);
+
+        MockMsgSenderRouter untrusted = new MockMsgSenderRouter(poolManager);
+        address bob = makeAddr("bob");
+
+        token0.mint(bob, 1_000_000 ether);
+        token1.mint(bob, 1_000_000 ether);
+        vm.startPrank(bob);
+        token0.approve(address(untrusted), type(uint256).max);
+        token1.approve(address(untrusted), type(uint256).max);
+        vm.stopPrank();
+
+        untrusted.addLiquidityFor(bob, key, ModifyLiquidityParams({
+            tickLower: -120,
+            tickUpper: 120,
+            liquidityDelta: 1000e6,
+            salt: bytes32(0)
+        }));
+
+        bytes32 bobKey    = _positionKey(bob, -120, 120, bytes32(0));
+        bytes32 routerKey = _positionKey(address(untrusted), -120, 120, bytes32(0));
+
+        assertEq(brook.getLPState(id, bobKey).liquidity, 0, "user holds nothing when router untrusted");
+        assertEq(brook.getLPState(id, routerKey).liquidity, uint128(1000e6), "position keys to router");
+    }
+
+    function test_setTrustedRouter_revertsForNonAdmin() public {
+        address rando = makeAddr("rando");
+        vm.prank(rando);
+        vm.expectRevert(Brook.NotRegistryAdmin.selector);
+        brook.setTrustedRouter(address(0xBEEF), true);
     }
 }

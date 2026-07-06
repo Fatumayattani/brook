@@ -17,6 +17,12 @@ import {Types} from "./libraries/Types.sol";
 import {BrookConstants} from "./libraries/Types.sol";
 import {ScoreLib} from "./libraries/ScoreLib.sol";
 
+/// @dev Implemented by trusted routers (e.g. Uniswap's Universal Router and
+///      community routers) to expose the original caller behind the router.
+interface IMsgSender {
+    function msgSender() external view returns (address);
+}
+
 /// @title Brook
 /// @notice A Uniswap v4 hook for predictable, paycheck-style LP yield.
 contract Brook is BaseHook, IBrook {
@@ -37,6 +43,23 @@ contract Brook is BaseHook, IBrook {
     mapping(bytes32 poolId => Currency) internal _feeCurrency;
     bool internal _locked;
 
+    /// @notice Routers trusted to report the true user via IMsgSender.
+    ///         When a trusted router adds or removes liquidity, positions key
+    ///         to the real user behind the router rather than the router
+    ///         itself. Empty registry preserves legacy behavior exactly.
+    mapping(address => bool) public trustedRouters;
+
+    /// @notice Set once at construction; manages the trusted router registry.
+    address public immutable registryAdmin;
+
+    // ---------------------------------------------------------------------
+    // Errors and events (registry)
+    // ---------------------------------------------------------------------
+
+    error NotRegistryAdmin();
+
+    event TrustedRouterSet(address indexed router, bool trusted);
+
     // ---------------------------------------------------------------------
     // Modifiers
     // ---------------------------------------------------------------------
@@ -52,7 +75,21 @@ contract Brook is BaseHook, IBrook {
     // Constructor
     // ---------------------------------------------------------------------
 
-    constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
+    constructor(IPoolManager _poolManager) BaseHook(_poolManager) {
+        registryAdmin = msg.sender;
+    }
+
+    // ---------------------------------------------------------------------
+    // Trusted router registry
+    // ---------------------------------------------------------------------
+
+    /// @notice Register or deregister a trusted IMsgSender router.
+    /// @dev Only the registry admin (deployer) may modify the registry.
+    function setTrustedRouter(address router_, bool trusted) external {
+        if (msg.sender != registryAdmin) revert NotRegistryAdmin();
+        trustedRouters[router_] = trusted;
+        emit TrustedRouterSet(router_, trusted);
+    }
 
     // ---------------------------------------------------------------------
     // Pool configuration
@@ -177,7 +214,7 @@ contract Brook is BaseHook, IBrook {
         bytes calldata
     ) internal override returns (bytes4, BalanceDelta) {
         bytes32 poolId      = keccak256(abi.encode(key));
-        bytes32 positionKey = _derivePositionKey(sender, params);
+        bytes32 positionKey = _derivePositionKey(_resolveOwner(sender), params);
         Types.LPState storage lp = _positions[poolId][positionKey];
         uint64 now_ = uint64(block.timestamp);
 
@@ -188,6 +225,7 @@ contract Brook is BaseHook, IBrook {
             lp.lastTouched = now_;
             lp.liquidity   = uint128(uint256(int256(params.liquidityDelta)));
         } else {
+            _refreshTick(poolId, key);
             _settleTime(poolId, positionKey, now_);
             lp.liquidity  += uint128(uint256(int256(params.liquidityDelta)));
             lp.lastTouched = now_;
@@ -204,7 +242,8 @@ contract Brook is BaseHook, IBrook {
         bytes calldata
     ) internal override returns (bytes4) {
         bytes32 poolId      = keccak256(abi.encode(key));
-        bytes32 positionKey = _derivePositionKey(sender, params);
+        bytes32 positionKey = _derivePositionKey(_resolveOwner(sender), params);
+        _refreshTick(poolId, key);
         _settleTime(poolId, positionKey, uint64(block.timestamp));
         return BaseHook.beforeRemoveLiquidity.selector;
     }
@@ -218,7 +257,7 @@ contract Brook is BaseHook, IBrook {
         bytes calldata
     ) internal override returns (bytes4, BalanceDelta) {
         bytes32 poolId      = keccak256(abi.encode(key));
-        bytes32 positionKey = _derivePositionKey(sender, params);
+        bytes32 positionKey = _derivePositionKey(_resolveOwner(sender), params);
         Types.LPState storage lp = _positions[poolId][positionKey];
         uint128 removed = uint128(uint256(int256(-params.liquidityDelta)));
 
@@ -306,9 +345,9 @@ contract Brook is BaseHook, IBrook {
     // Claim
     /// @notice Claims vested yield from the previous epoch's buffer.
     /// @dev Callable by anyone who knows the positionKey. The positionKey is
-   /// derived from keccak256(abi.encode(sender, tickLower, tickUpper, salt))
-   /// where sender is the address that called modifyLiquidity — typically
-  ///  a router or position manager, not the LP's EOA directly.
+   /// derived from keccak256(abi.encode(owner, tickLower, tickUpper, salt))
+   /// where owner is the resolved position owner — the real user behind a
+  ///  trusted IMsgSender router, or the modifyLiquidity caller otherwise.
   ///  Yield is sent to recipient regardless of who calls claim.
   ///  nonReentrant guard prevents reentrancy via malicious ERC20 callbacks.
 
@@ -396,6 +435,19 @@ contract Brook is BaseHook, IBrook {
         emit EpochRolled(poolId, prevBuffer, uint64(block.timestamp));
     }
 
+    /// @dev Resolves the true position owner. If the caller is a trusted
+    ///      router implementing IMsgSender, positions key to the real user
+    ///      behind the router; otherwise to the caller itself (unchanged
+    ///      legacy behavior, and how BrookRouter's salt scheme operates).
+    function _resolveOwner(address sender) internal view returns (address) {
+        if (trustedRouters[sender]) {
+            try IMsgSender(sender).msgSender() returns (address user) {
+                if (user != address(0)) return user;
+            } catch {}
+        }
+        return sender;
+    }
+
     function _derivePositionKey(
         address owner,
         ModifyLiquidityParams calldata params
@@ -406,6 +458,15 @@ contract Brook is BaseHook, IBrook {
             params.tickUpper,
             params.salt
         ));
+    }
+
+    /// @dev Refreshes the pool's current tick before time settlement, so
+    ///      in-range accounting uses the live price at liquidity events
+    ///      rather than the tick from the most recent swap. Reduces scoring
+    ///      drift between swaps.
+    function _refreshTick(bytes32 poolId, PoolKey calldata key) internal {
+        (, int24 tick,,) = poolManager.getSlot0(key.toId());
+        _epoch[poolId].currentTick = tick;
     }
 
     function _settleTime(
@@ -435,8 +496,8 @@ contract Brook is BaseHook, IBrook {
     // View functions
     
     /// @notice Helper for LPs to compute their position key off-chain or on-chain.
-   /// @dev Position key = keccak256(abi.encode(sender, tickLower, tickUpper, salt))
-   ///      where sender is whoever called modifyLiquidity (router, position manager).
+   /// @dev Position key = keccak256(abi.encode(owner, tickLower, tickUpper, salt))
+   ///      where owner is the resolved position owner (see _resolveOwner).
    function computePositionKey(
     address sender,
     int24 tickLower,
