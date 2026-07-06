@@ -179,6 +179,29 @@ forge script script/DeployBrook.s.sol \
 - **RPC:** https://sepolia.unichain.org
 - **Explorer:** https://unichain-sepolia.blockscout.com
 
+## Post-hookathon improvements
+
+Two refinements made after the UHI9 submission, both implemented and covered by tests
+(the deployed testnet contract predates them; they ship with the audited mainnet build).
+
+### Standard-router support via IMsgSender
+
+The salt-based router above is one way to attribute positions to real users. For
+production, Brook also supports the canonical pattern: a trusted-router registry. When
+liquidity arrives from a router that Brook's admin has registered and that implements
+Uniswap's `IMsgSender` interface (Universal Router, community routers), Brook resolves
+the true user via `msgSender()` and keys the position to them, rather than to the
+router. Unregistered callers behave exactly as before, so the change is fully backward
+compatible. This lets Brook work with the standard routers real frontends already use,
+not only its own periphery.
+
+### Reduced in-range sampling drift
+
+Brook credits each LP's in-range time based on the pool's current tick. Previously the
+tick was refreshed only on swaps, so between trades the score could drift from reality.
+The tick is now also refreshed at add-liquidity and remove-liquidity settlements, so
+in-range accounting reflects the live price at every position touchpoint. 
+
 ## Resources
 
 - Uniswap v4 docs: https://docs.uniswap.org/contracts/v4
